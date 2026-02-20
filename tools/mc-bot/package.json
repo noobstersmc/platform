@@ -1,0 +1,21 @@
+{
+  "name": "mc-bot",
+  "version": "1.0.0",
+  "description": "Mineflayer-based Velocity test client",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "start:docker": "docker run --rm -it --network host -v \"$PWD\":/app -w /app node:22 bash -lc 'npm ci && node bot.js'",
+    "start:docker:daemon": "docker rm -f mc-bot >/dev/null 2>&1 || true && docker run -d --name mc-bot --network host -v \"$PWD\":/app -w /app node:22 bash -lc \"npm ci && node bot.js\"",
+    "stop:docker": "docker rm -f mc-bot",
+    "logs:docker": "docker logs -f mc-bot",
+    "ctl": "./mc-botctl.sh"
+  },
+  "keywords": [],
+  "author": "noobstersmc",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "mineflayer": "^4.35.0"
+  }
+}

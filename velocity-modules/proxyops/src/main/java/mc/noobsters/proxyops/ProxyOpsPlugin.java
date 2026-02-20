@@ -4,6 +4,7 @@ import com.google.inject.Inject;
 import com.velocitypowered.api.command.CommandMeta;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.permission.Tristate;
 import com.velocitypowered.api.plugin.Plugin;
@@ -48,7 +49,9 @@ public class ProxyOpsPlugin {
     private final String discoveryLabelValue;
     private final String discoveryNamePrefix;
     private final long discoveryIntervalSeconds;
+    private final String runtimeConfigMap;
     private final Set<String> managedDiscoveredServers = new HashSet<>();
+    private volatile String defaultServerKey = "limbo";
     private KubernetesClient k8s;
 
     @Inject
@@ -68,8 +71,9 @@ public class ProxyOpsPlugin {
         this.discoveryEnabled = Boolean.parseBoolean(envOr("PROXY_DISCOVERY_ENABLED", "true"));
         this.discoveryLabelKey = envOr("PROXY_DISCOVERY_LABEL_KEY", "mc.noobsters.net/velocity-discovery");
         this.discoveryLabelValue = envOr("PROXY_DISCOVERY_LABEL_VALUE", "enabled");
-        this.discoveryNamePrefix = envOr("PROXY_DISCOVERY_NAME_PREFIX", "auto-");
+        this.discoveryNamePrefix = envOrAllowBlank("PROXY_DISCOVERY_NAME_PREFIX", "auto-");
         this.discoveryIntervalSeconds = Long.parseLong(envOr("PROXY_DISCOVERY_INTERVAL_SECONDS", "5"));
+        this.runtimeConfigMap = envOr("PROXY_RUNTIME_CONFIGMAP", "proxyops-runtime");
     }
 
     @Subscribe
@@ -81,12 +85,24 @@ public class ProxyOpsPlugin {
                 .build();
         proxy.getCommandManager().register(meta, new ProxyOpsCommand());
         logger.info("ProxyOps loaded on pod {}", podName);
+        reconcileState();
+        proxy.getScheduler().buildTask(this, this::reconcileState)
+                .repeat(Duration.ofSeconds(Math.max(3, discoveryIntervalSeconds)))
+                .schedule();
+        if (discoveryEnabled) {
+            logger.info("ProxyOps discovery enabled: label {}={}", discoveryLabelKey, discoveryLabelValue);
+        }
+    }
+
+    @Subscribe
+    public void onChooseInitialServer(PlayerChooseInitialServerEvent event) {
+        resolveDefaultServer().ifPresent(event::setInitialServer);
+    }
+
+    private void reconcileState() {
+        refreshDefaultServerKey();
         if (discoveryEnabled) {
             syncDiscoveredServers();
-            proxy.getScheduler().buildTask(this, this::syncDiscoveredServers)
-                    .repeat(Duration.ofSeconds(Math.max(3, discoveryIntervalSeconds)))
-                    .schedule();
-            logger.info("ProxyOps discovery enabled: label {}={}", discoveryLabelKey, discoveryLabelValue);
         }
     }
 
@@ -105,6 +121,10 @@ public class ProxyOpsPlugin {
         for (ServerInfo info : desired.values()) {
             Optional<RegisteredServer> existing = proxy.getServer(info.getName());
             if (existing.isPresent()) {
+                if (!managedDiscoveredServers.contains(info.getName())) {
+                    // Do not override statically configured servers with the same name.
+                    continue;
+                }
                 InetSocketAddress old = existing.get().getServerInfo().getAddress();
                 if (old.getHostString().equals(info.getAddress().getHostString()) && old.getPort() == info.getAddress().getPort()) {
                     managedDiscoveredServers.add(info.getName());
@@ -126,9 +146,37 @@ public class ProxyOpsPlugin {
         }
     }
 
+    private void refreshDefaultServerKey() {
+        String value = k8s.getConfigMapKey(namespace, runtimeConfigMap, "defaultServer");
+        if (value != null && !value.isBlank()) {
+            defaultServerKey = value.trim();
+        }
+    }
+
+    private Optional<RegisteredServer> resolveDefaultServer() {
+        String desired = defaultServerKey;
+        Optional<RegisteredServer> exact = proxy.getServer(desired);
+        if (exact.isPresent()) {
+            return exact;
+        }
+        List<String> matches = managedDiscoveredServers.stream()
+                .filter(n -> n.equals(desired) || n.startsWith(desired + "-"))
+                .sorted()
+                .toList();
+        if (!matches.isEmpty()) {
+            return proxy.getServer(matches.get(0));
+        }
+        return proxy.getServer("limbo");
+    }
+
     private String envOr(String key, String def) {
         String v = System.getenv(key);
         return (v == null || v.isBlank()) ? def : v;
+    }
+
+    private String envOrAllowBlank(String key, String def) {
+        String v = System.getenv(key);
+        return v == null ? def : v;
     }
 
     private final class ProxyOpsCommand implements SimpleCommand {
@@ -145,6 +193,7 @@ public class ProxyOpsPlugin {
                 case "go" -> go(invocation);
                 case "update" -> update(invocation);
                 case "servers" -> servers(invocation);
+                case "default" -> setDefault(invocation);
                 default -> usage(invocation);
             }
         }
@@ -155,7 +204,7 @@ public class ProxyOpsPlugin {
         }
 
         private void usage(Invocation inv) {
-            inv.source().sendMessage(Component.text("/proxyops where | list | servers | go <pod-name> | update", NamedTextColor.YELLOW));
+            inv.source().sendMessage(Component.text("/proxyops where | list | servers | default [name] | go <pod-name> | update", NamedTextColor.YELLOW));
         }
 
         private void where(Invocation inv) {
@@ -246,11 +295,7 @@ public class ProxyOpsPlugin {
         }
 
         private void servers(Invocation inv) {
-            List<String> names = proxy.getAllServers().stream()
-                    .map(rs -> rs.getServerInfo().getName())
-                    .filter(n -> n.startsWith(discoveryNamePrefix))
-                    .sorted()
-                    .toList();
+            List<String> names = managedDiscoveredServers.stream().sorted().toList();
             if (names.isEmpty()) {
                 inv.source().sendMessage(Component.text("No discovered backends currently registered.", NamedTextColor.YELLOW));
                 return;
@@ -261,16 +306,57 @@ public class ProxyOpsPlugin {
             }
         }
 
+        private void setDefault(Invocation inv) {
+            String[] args = inv.arguments();
+            if (args.length == 1) {
+                Optional<RegisteredServer> resolved = resolveDefaultServer();
+                String resolvedName = resolved.map(s -> s.getServerInfo().getName()).orElse("none");
+                inv.source().sendMessage(Component.text(
+                        "Default key: " + defaultServerKey + " (resolves to " + resolvedName + ")",
+                        NamedTextColor.AQUA));
+                return;
+            }
+            if (inv.source().getPermissionValue("proxyops.update") == Tristate.FALSE) {
+                inv.source().sendMessage(Component.text("Missing permission: proxyops.update", NamedTextColor.RED));
+                return;
+            }
+            String desired = args[1].trim();
+            if (desired.isEmpty()) {
+                inv.source().sendMessage(Component.text("Usage: /proxyops default <name>", NamedTextColor.YELLOW));
+                return;
+            }
+            boolean ok = k8s.patchConfigMapKey(namespace, runtimeConfigMap, "defaultServer", desired);
+            if (!ok) {
+                inv.source().sendMessage(Component.text("Failed to update default server key.", NamedTextColor.RED));
+                return;
+            }
+            defaultServerKey = desired;
+            Optional<RegisteredServer> resolved = resolveDefaultServer();
+            String resolvedName = resolved.map(s -> s.getServerInfo().getName()).orElse("none");
+            inv.source().sendMessage(Component.text(
+                    "Default key set to " + desired + " (resolves to " + resolvedName + ")",
+                    NamedTextColor.GREEN));
+        }
+
         @Override
         public List<String> suggest(Invocation invocation) {
             String[] args = invocation.arguments();
             if (args.length == 0) {
-                return List.of("where", "list", "servers", "go", "update");
+                return List.of("where", "list", "servers", "default", "go", "update");
             }
             if (args.length == 1) {
-                return List.of("where", "list", "servers", "go", "update").stream()
+                return List.of("where", "list", "servers", "default", "go", "update").stream()
                         .filter(s -> s.startsWith(args[0].toLowerCase()))
                         .toList();
+            }
+            if (args.length == 2 && "default".equalsIgnoreCase(args[0])) {
+                List<String> out = new ArrayList<>();
+                out.add("lobby");
+                out.add("survival");
+                out.add("creative");
+                out.add("limbo");
+                out.addAll(managedDiscoveredServers.stream().sorted().toList());
+                return out.stream().filter(s -> s.startsWith(args[1])).toList();
             }
             if (args.length == 2 && "go".equalsIgnoreCase(args[0])) {
                 List<String> out = new ArrayList<>();

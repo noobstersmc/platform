@@ -1,0 +1,10 @@
+# Build outputs
+target/
+
+# Local runtime state
+*.log
+
+# Tooling
+tools/mc-bot/node_modules/
+tools/mc-bot/.profiles/
+tools/mc-bot/.env

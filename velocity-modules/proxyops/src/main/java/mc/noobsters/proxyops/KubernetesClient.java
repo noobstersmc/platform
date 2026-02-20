@@ -25,6 +25,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class KubernetesClient {
     private static final String SA_ROOT = "/var/run/secrets/kubernetes.io/serviceaccount";
@@ -114,24 +116,33 @@ public class KubernetesClient {
                 return out;
             }
 
-            Map<String, Integer> readyByService = new HashMap<>();
+            Map<String, List<EndpointRef>> endpointsByService = new HashMap<>();
             JsonArray epItems = epRoot.getAsJsonArray("items");
             if (epItems != null) {
                 for (JsonElement item : epItems) {
                     JsonObject ep = item.getAsJsonObject();
                     String name = str(ep, "metadata", "name");
-                    int ready = 0;
+                    List<EndpointRef> refs = new ArrayList<>();
                     JsonArray subsets = ep.getAsJsonArray("subsets");
                     if (subsets != null) {
                         for (JsonElement subsetE : subsets) {
                             JsonObject subset = subsetE.getAsJsonObject();
                             JsonArray addrs = subset.getAsJsonArray("addresses");
                             if (addrs != null) {
-                                ready += addrs.size();
+                                for (JsonElement addrE : addrs) {
+                                    JsonObject addr = addrE.getAsJsonObject();
+                                    String ip = str(addr, "ip");
+                                    if (ip.isBlank()) {
+                                        continue;
+                                    }
+                                    String podName = str(addr, "targetRef", "name");
+                                    String podUid = str(addr, "targetRef", "uid");
+                                    refs.add(new EndpointRef(ip, podName, podUid));
+                                }
                             }
                         }
                     }
-                    readyByService.put(name, ready);
+                    endpointsByService.put(name, refs);
                 }
             }
 
@@ -170,9 +181,21 @@ public class KubernetesClient {
                     continue;
                 }
 
-                int ready = readyByService.getOrDefault(svcName, 0);
-                String host = svcName + "." + namespace + ".svc.cluster.local";
-                out.add(new BackendRef(configuredName, host, port, ready));
+                List<EndpointRef> refs = endpointsByService.getOrDefault(svcName, List.of());
+                for (EndpointRef ref : refs) {
+                    String podPart = podHint(ref.podName(), ref.ip());
+                    String uidPart = "";
+                    if (!ref.podUid().isBlank()) {
+                        String[] parts = ref.podUid().split("-");
+                        String tail = parts.length == 0 ? ref.podUid() : parts[parts.length - 1];
+                        if (tail.length() > 6) {
+                            tail = tail.substring(0, 6);
+                        }
+                        uidPart = "-" + tail;
+                    }
+                    String backendName = configuredName + "-" + podPart + uidPart;
+                    out.add(new BackendRef(backendName, ref.ip(), port, 1));
+                }
             }
         } catch (Exception e) {
             logger.error("Failed to list discoverable backends", e);
@@ -206,6 +229,52 @@ public class KubernetesClient {
             return false;
         } catch (Exception e) {
             logger.error("Failed to restart workload", e);
+            return false;
+        }
+    }
+
+    public String getConfigMapKey(String namespace, String configMapName, String key) {
+        if (bearer.isBlank()) {
+            return null;
+        }
+        try {
+            JsonObject root = get("/api/v1/namespaces/" + namespace + "/configmaps/" + configMapName);
+            if (root == null) {
+                return null;
+            }
+            JsonObject data = root.getAsJsonObject("data");
+            if (data == null || !data.has(key)) {
+                return null;
+            }
+            return data.get(key).getAsString();
+        } catch (Exception e) {
+            logger.error("Failed to get configmap key {} from {}", key, configMapName, e);
+            return null;
+        }
+    }
+
+    public boolean patchConfigMapKey(String namespace, String configMapName, String key, String value) {
+        if (bearer.isBlank()) {
+            return false;
+        }
+        try {
+            String escaped = value.replace("\\", "\\\\").replace("\"", "\\\"");
+            String body = "{\"data\":{\"" + key + "\":\"" + escaped + "\"}}";
+            String path = "/api/v1/namespaces/" + namespace + "/configmaps/" + configMapName;
+            HttpRequest req = HttpRequest.newBuilder(URI.create("https://kubernetes.default.svc" + path))
+                    .timeout(Duration.ofSeconds(5))
+                    .header("Authorization", "Bearer " + bearer)
+                    .header("Content-Type", "application/merge-patch+json")
+                    .method("PATCH", HttpRequest.BodyPublishers.ofString(body))
+                    .build();
+            HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
+            if (res.statusCode() >= 200 && res.statusCode() < 300) {
+                return true;
+            }
+            logger.error("ConfigMap PATCH failed: {} {}", res.statusCode(), res.body());
+            return false;
+        } catch (Exception e) {
+            logger.error("Failed to patch configmap key {} on {}", key, configMapName, e);
             return false;
         }
     }
@@ -266,6 +335,26 @@ public class KubernetesClient {
         return c.getAsJsonArray();
     }
 
+    private static String podHint(String podName, String ip) {
+        if (podName == null || podName.isBlank()) {
+            return ip.replace('.', '-');
+        }
+        Matcher ordinal = Pattern.compile(".*-(\\d+)$").matcher(podName);
+        if (ordinal.matches()) {
+            return ordinal.group(1);
+        }
+        Matcher deploySuffix = Pattern.compile(".*-([a-z0-9]{5})$").matcher(podName);
+        if (deploySuffix.matches()) {
+            return deploySuffix.group(1);
+        }
+        int idx = podName.lastIndexOf('-');
+        if (idx > 0 && idx < podName.length() - 1) {
+            return podName.substring(idx + 1);
+        }
+        return podName;
+    }
+
     public record PodRef(String name, String podIp, boolean ready) {}
     public record BackendRef(String name, String host, int port, int readyEndpoints) {}
+    private record EndpointRef(String ip, String podName, String podUid) {}
 }

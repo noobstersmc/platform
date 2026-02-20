@@ -33,13 +33,14 @@ data:
     enable-player-address-logging = true
 
     [servers]
-    lobby = "paper-lobby:25565"
-    survival = "paper-survival:25565"
-    creative = "paper-creative:25565"
-    try = ["lobby", "survival", "creative"]
+    limbo = "paper-limbo:25565"
+    try = ["limbo"]
 
     [forced-hosts]
-    "lobby.local" = ["lobby"]
+    "lobby.example.com" = ["limbo"]
+    "factions.example.com" = ["limbo"]
+    "minigames.example.com" = ["limbo"]
+    "limbo.local" = ["limbo"]
 
     [advanced]
     compression-threshold = 256
@@ -78,13 +79,14 @@ data:
     enable-player-address-logging = true
 
     [servers]
-    lobby = "paper-lobby:25565"
-    survival = "paper-survival:25565"
-    creative = "paper-creative:25565"
-    try = ["lobby", "survival", "creative"]
+    limbo = "paper-limbo:25565"
+    try = ["limbo"]
 
     [forced-hosts]
-    "lobby.local" = ["lobby"]
+    "lobby.example.com" = ["limbo"]
+    "factions.example.com" = ["limbo"]
+    "minigames.example.com" = ["limbo"]
+    "limbo.local" = ["limbo"]
 
     [advanced]
     compression-threshold = 256
@@ -123,13 +125,14 @@ data:
     enable-player-address-logging = true
 
     [servers]
-    lobby = "paper-lobby:25565"
-    survival = "paper-survival:25565"
-    creative = "paper-creative:25565"
-    try = ["lobby", "survival", "creative"]
+    limbo = "paper-limbo:25565"
+    try = ["limbo"]
 
     [forced-hosts]
-    "lobby.local" = ["lobby"]
+    "lobby.example.com" = ["limbo"]
+    "factions.example.com" = ["limbo"]
+    "minigames.example.com" = ["limbo"]
+    "limbo.local" = ["limbo"]
 
     [advanced]
     compression-threshold = 256
@@ -160,6 +163,14 @@ data:
         enabled: true
         online-mode: true
         secret: "noobstersmc-forwarding-secret-2026"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: proxyops-runtime
+  namespace: minecraft
+data:
+  defaultServer: lobby
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -545,7 +556,9 @@ spec:
         - name: PROXY_DISCOVERY_LABEL_VALUE
           value: "enabled"
         - name: PROXY_DISCOVERY_NAME_PREFIX
-          value: "auto-"
+          value: ""
+        - name: PROXY_RUNTIME_CONFIGMAP
+          value: "proxyops-runtime"
         - name: PROXY_DISCOVERY_INTERVAL_SECONDS
           value: "5"
         volumeMounts:
@@ -649,18 +662,18 @@ data:
 
     backend velocity_backends
       balance roundrobin
-      server proxy0 velocity-0.velocity-headless.minecraft.svc.cluster.local:25577 send-proxy
-      server proxy1 velocity-1.velocity-headless.minecraft.svc.cluster.local:25577 send-proxy
-      server proxy2 velocity-2.velocity-headless.minecraft.svc.cluster.local:25577 send-proxy
+      server proxy0 velocity-0-svc.minecraft.svc.cluster.local:25577 send-proxy
+      server proxy1 velocity-1-svc.minecraft.svc.cluster.local:25577 send-proxy
+      server proxy2 velocity-2-svc.minecraft.svc.cluster.local:25577 send-proxy
 
     backend velocity_0
-      server proxy0 velocity-0.velocity-headless.minecraft.svc.cluster.local:25577 send-proxy
+      server proxy0 velocity-0-svc.minecraft.svc.cluster.local:25577 send-proxy
 
     backend velocity_1
-      server proxy1 velocity-1.velocity-headless.minecraft.svc.cluster.local:25577 send-proxy
+      server proxy1 velocity-1-svc.minecraft.svc.cluster.local:25577 send-proxy
 
     backend velocity_2
-      server proxy2 velocity-2.velocity-headless.minecraft.svc.cluster.local:25577 send-proxy
+      server proxy2 velocity-2-svc.minecraft.svc.cluster.local:25577 send-proxy
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -752,6 +765,9 @@ rules:
 - apiGroups: [""]
   resources: ["pods", "services", "endpoints"]
   verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "patch"]
 - apiGroups: ["apps"]
   resources: ["deployments", "statefulsets"]
   verbs: ["get", "patch"]
@@ -780,6 +796,45 @@ spec:
   selector:
     app: velocity
     proxy-id: "3"
+  ports:
+  - name: minecraft
+    port: 25577
+    targetPort: minecraft
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: velocity-0-svc
+  namespace: minecraft
+spec:
+  selector:
+    statefulset.kubernetes.io/pod-name: velocity-0
+  ports:
+  - name: minecraft
+    port: 25577
+    targetPort: minecraft
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: velocity-1-svc
+  namespace: minecraft
+spec:
+  selector:
+    statefulset.kubernetes.io/pod-name: velocity-1
+  ports:
+  - name: minecraft
+    port: 25577
+    targetPort: minecraft
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: velocity-2-svc
+  namespace: minecraft
+spec:
+  selector:
+    statefulset.kubernetes.io/pod-name: velocity-2
   ports:
   - name: minecraft
     port: 25577
@@ -1082,10 +1137,6 @@ kind: Service
 metadata:
   name: paper-lobby
   namespace: minecraft
-  labels:
-    mc.noobsters.net/velocity-discovery: "enabled"
-  annotations:
-    mc.noobsters.net/velocity-server-name: lobby
 spec:
   selector:
     app: paper-lobby
@@ -1184,6 +1235,40 @@ spec:
       - name: paper-proxy-config
         configMap:
           name: paper-proxy-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: paper-lobby-0
+  namespace: minecraft
+  labels:
+    mc.noobsters.net/velocity-discovery: "enabled"
+  annotations:
+    mc.noobsters.net/velocity-server-name: lobby
+spec:
+  selector:
+    statefulset.kubernetes.io/pod-name: paper-lobby-0
+  ports:
+  - name: minecraft
+    port: 25565
+    targetPort: minecraft
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: paper-lobby-1
+  namespace: minecraft
+  labels:
+    mc.noobsters.net/velocity-discovery: "enabled"
+  annotations:
+    mc.noobsters.net/velocity-server-name: lobby
+spec:
+  selector:
+    statefulset.kubernetes.io/pod-name: paper-lobby-1
+  ports:
+  - name: minecraft
+    port: 25565
+    targetPort: minecraft
 ---
 apiVersion: v1
 kind: Service
@@ -1305,6 +1390,101 @@ metadata:
 spec:
   selector:
     app: paper-creative
+  ports:
+  - name: minecraft
+    port: 25565
+    targetPort: minecraft
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paper-limbo
+  namespace: minecraft
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: paper-limbo
+  template:
+    metadata:
+      labels:
+        app: paper-limbo
+    spec:
+      containers:
+      - name: minecraft
+        image: itzg/minecraft-server:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 25565
+          name: minecraft
+        env:
+        - name: EULA
+          value: "TRUE"
+        - name: TYPE
+          value: PAPER
+        - name: VERSION
+          value: "1.21.4"
+        - name: ONLINE_MODE
+          value: "FALSE"
+        - name: ACCEPTS_TRANSFERS
+          value: "TRUE"
+        - name: MEMORY
+          value: 768M
+        - name: LEVEL_TYPE
+          value: "FLAT"
+        - name: GENERATOR_SETTINGS
+          value: '{"layers":[],"biome":"minecraft:the_void","structures":{}}'
+        - name: MODE
+          value: spectator
+        - name: DIFFICULTY
+          value: peaceful
+        - name: ALLOW_NETHER
+          value: "false"
+        - name: PVP
+          value: "false"
+        - name: SPAWN_MONSTERS
+          value: "false"
+        - name: SPAWN_ANIMALS
+          value: "false"
+        - name: SPAWN_NPCS
+          value: "false"
+        - name: VIEW_DISTANCE
+          value: "2"
+        - name: SIMULATION_DISTANCE
+          value: "2"
+        - name: MAX_PLAYERS
+          value: "40"
+        - name: MOTD
+          value: "Limbo"
+        volumeMounts:
+        - name: paper-proxy-config
+          mountPath: /config/paper-global.yml
+          subPath: paper-global.yml
+        readinessProbe:
+          tcpSocket:
+            port: minecraft
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket:
+            port: minecraft
+          initialDelaySeconds: 120
+          periodSeconds: 20
+      volumes:
+      - name: paper-proxy-config
+        configMap:
+          name: paper-proxy-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: paper-limbo
+  namespace: minecraft
+spec:
+  selector:
+    app: paper-limbo
   ports:
   - name: minecraft
     port: 25565
