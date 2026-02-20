@@ -1,0 +1,1036 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: minecraft
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: velocity-forwarding-secret
+  namespace: minecraft
+type: Opaque
+stringData:
+  forwarding.secret: noobstersmc-forwarding-secret-2026
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: velocity-config-1
+  namespace: minecraft
+data:
+  velocity.toml: |
+    config-version = "2.7"
+    bind = "0.0.0.0:25577"
+    motd = "Velocity proxy-1"
+    show-max-players = 500
+    online-mode = true
+    force-key-authentication = false
+    player-info-forwarding-mode = "modern"
+    forwarding-secret-file = "/etc/velocity-secret/forwarding.secret"
+    announce-forge = false
+    kick-existing-players = false
+    ping-passthrough = "disabled"
+    enable-player-address-logging = true
+
+    [servers]
+    lobby = "paper-lobby:25565"
+    survival = "paper-survival:25565"
+    creative = "paper-creative:25565"
+    try = ["lobby", "survival", "creative"]
+
+    [forced-hosts]
+    "lobby.local" = ["lobby"]
+
+    [advanced]
+    compression-threshold = 256
+    compression-level = -1
+    login-ratelimit = 3000
+    connection-timeout = 5000
+    read-timeout = 30000
+    haproxy-protocol = false
+    tcp-fast-open = false
+    bungee-plugin-message-channel = true
+    show-ping-requests = false
+    failover-on-unexpected-server-disconnect = true
+    announce-proxy-commands = true
+    log-command-executions = false
+    log-player-connections = true
+    accepts-transfers = true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: velocity-config-2
+  namespace: minecraft
+data:
+  velocity.toml: |
+    config-version = "2.7"
+    bind = "0.0.0.0:25577"
+    motd = "Velocity proxy-2"
+    show-max-players = 500
+    online-mode = true
+    force-key-authentication = false
+    player-info-forwarding-mode = "modern"
+    forwarding-secret-file = "/etc/velocity-secret/forwarding.secret"
+    announce-forge = false
+    kick-existing-players = false
+    ping-passthrough = "disabled"
+    enable-player-address-logging = true
+
+    [servers]
+    lobby = "paper-lobby:25565"
+    survival = "paper-survival:25565"
+    creative = "paper-creative:25565"
+    try = ["lobby", "survival", "creative"]
+
+    [forced-hosts]
+    "lobby.local" = ["lobby"]
+
+    [advanced]
+    compression-threshold = 256
+    compression-level = -1
+    login-ratelimit = 3000
+    connection-timeout = 5000
+    read-timeout = 30000
+    haproxy-protocol = false
+    tcp-fast-open = false
+    bungee-plugin-message-channel = true
+    show-ping-requests = false
+    failover-on-unexpected-server-disconnect = true
+    announce-proxy-commands = true
+    log-command-executions = false
+    log-player-connections = true
+    accepts-transfers = true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: velocity-config-3
+  namespace: minecraft
+data:
+  velocity.toml: |
+    config-version = "2.7"
+    bind = "0.0.0.0:25577"
+    motd = "Velocity proxy-3"
+    show-max-players = 500
+    online-mode = true
+    force-key-authentication = false
+    player-info-forwarding-mode = "modern"
+    forwarding-secret-file = "/etc/velocity-secret/forwarding.secret"
+    announce-forge = false
+    kick-existing-players = false
+    ping-passthrough = "disabled"
+    enable-player-address-logging = true
+
+    [servers]
+    lobby = "paper-lobby:25565"
+    survival = "paper-survival:25565"
+    creative = "paper-creative:25565"
+    try = ["lobby", "survival", "creative"]
+
+    [forced-hosts]
+    "lobby.local" = ["lobby"]
+
+    [advanced]
+    compression-threshold = 256
+    compression-level = -1
+    login-ratelimit = 3000
+    connection-timeout = 5000
+    read-timeout = 30000
+    haproxy-protocol = false
+    tcp-fast-open = false
+    bungee-plugin-message-channel = true
+    show-ping-requests = false
+    failover-on-unexpected-server-disconnect = true
+    announce-proxy-commands = true
+    log-command-executions = false
+    log-player-connections = true
+    accepts-transfers = true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: paper-proxy-config
+  namespace: minecraft
+data:
+  paper-global.yml: |
+    _version: 29
+    proxies:
+      velocity:
+        enabled: true
+        online-mode: true
+        secret: "noobstersmc-forwarding-secret-2026"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: velocity-1
+  namespace: minecraft
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: velocity
+      proxy-id: "1"
+  template:
+    metadata:
+      labels:
+        app: velocity
+        proxy-id: "1"
+    spec:
+      terminationGracePeriodSeconds: 120
+      initContainers:
+      - name: install-transfer-plugins
+        image: curlimages/curl:8.12.1
+        envFrom:
+        - secretRef:
+            name: luckperms-db
+        command:
+        - /bin/sh
+        - -ec
+        - |
+          mkdir -p /work/plugins/velocityrcon
+          mkdir -p /work/plugins/luckperms
+          cp /patched/ProxyTransfer-1.0.jar /work/plugins/ProxyTransfer-1.0.jar
+          curl -fsSL -o /work/plugins/LuckPerms-Velocity-5.5.17.jar "https://cdn.modrinth.com/data/Vebnzrzj/versions/GZjsuCmU/LuckPerms-Velocity-5.5.17.jar"
+          curl -fsSL -o /work/plugins/Tribufu-VelocityRcon-1.2.0.jar "https://mvn.tribufu.com/releases/com/tribufu/Tribufu-VelocityRcon/1.2.0/Tribufu-VelocityRcon-1.2.0.jar"
+          cat > /work/plugins/luckperms/config.yml <<LPCONF
+          storage-method: postgresql
+          data:
+            address: luckperms-postgres.minecraft.svc.cluster.local:5432
+            database: ${POSTGRES_DB}
+            username: ${POSTGRES_USER}
+            password: ${POSTGRES_PASSWORD}
+          LPCONF
+          cat > /work/plugins/velocityrcon/rcon.toml <<'RCONF'
+          rcon-host = "0.0.0.0"
+          rcon-port = "25575"
+          rcon-password = "noobstersmc-rcon-password-2026"
+          rcon-colored = false
+          RCONF
+        volumeMounts:
+        - name: velocity-plugin-bootstrap
+          mountPath: /work/plugins
+        - name: proxytransfer-patched
+          mountPath: /patched
+      containers:
+      - name: velocity
+        image: itzg/mc-proxy:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 25577
+          name: minecraft
+        env:
+        - name: TYPE
+          value: VELOCITY
+        - name: RCON_PASSWORD
+          value: "noobstersmc-rcon-password-2026"
+        - name: TRANSFER_TARGET
+          value: "192.168.4.33:25577"
+        volumeMounts:
+        - name: velocity-plugin-bootstrap
+          mountPath: /plugins
+        - name: velocity-config
+          mountPath: /config/velocity.toml
+          subPath: velocity.toml
+        - name: forwarding-secret
+          mountPath: /etc/velocity-secret/forwarding.secret
+          subPath: forwarding.secret
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/bash
+              - -ec
+              - |
+                touch /tmp/draining
+                sleep 10
+                rcon-cli --host 127.0.0.1 --port 25575 --password "${RCON_PASSWORD}" "draintransfer ${TRANSFER_TARGET} all 3" || true
+                sleep 8
+                rcon-cli --host 127.0.0.1 --port 25575 --password "${RCON_PASSWORD}" "transfer ${TRANSFER_TARGET} all" || true
+                sleep 30
+        readinessProbe:
+          exec:
+            command:
+            - /bin/bash
+            - -ec
+            - |
+              test ! -f /tmp/draining
+              exec 3<>/dev/tcp/127.0.0.1/25577
+              exec 3<&-
+              exec 3>&-
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          tcpSocket:
+            port: minecraft
+          initialDelaySeconds: 30
+          periodSeconds: 20
+      volumes:
+      - name: velocity-plugin-bootstrap
+        emptyDir: {}
+      - name: proxytransfer-patched
+        configMap:
+          name: proxytransfer-patched
+      - name: velocity-config
+        configMap:
+          name: velocity-config-1
+      - name: forwarding-secret
+        secret:
+          secretName: velocity-forwarding-secret
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: velocity-2
+  namespace: minecraft
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: velocity
+      proxy-id: "2"
+  template:
+    metadata:
+      labels:
+        app: velocity
+        proxy-id: "2"
+    spec:
+      terminationGracePeriodSeconds: 120
+      initContainers:
+      - name: install-transfer-plugins
+        image: curlimages/curl:8.12.1
+        envFrom:
+        - secretRef:
+            name: luckperms-db
+        command:
+        - /bin/sh
+        - -ec
+        - |
+          mkdir -p /work/plugins/velocityrcon
+          mkdir -p /work/plugins/luckperms
+          cp /patched/ProxyTransfer-1.0.jar /work/plugins/ProxyTransfer-1.0.jar
+          curl -fsSL -o /work/plugins/LuckPerms-Velocity-5.5.17.jar "https://cdn.modrinth.com/data/Vebnzrzj/versions/GZjsuCmU/LuckPerms-Velocity-5.5.17.jar"
+          curl -fsSL -o /work/plugins/Tribufu-VelocityRcon-1.2.0.jar "https://mvn.tribufu.com/releases/com/tribufu/Tribufu-VelocityRcon/1.2.0/Tribufu-VelocityRcon-1.2.0.jar"
+          cat > /work/plugins/luckperms/config.yml <<LPCONF
+          storage-method: postgresql
+          data:
+            address: luckperms-postgres.minecraft.svc.cluster.local:5432
+            database: ${POSTGRES_DB}
+            username: ${POSTGRES_USER}
+            password: ${POSTGRES_PASSWORD}
+          LPCONF
+          cat > /work/plugins/velocityrcon/rcon.toml <<'RCONF'
+          rcon-host = "0.0.0.0"
+          rcon-port = "25575"
+          rcon-password = "noobstersmc-rcon-password-2026"
+          rcon-colored = false
+          RCONF
+        volumeMounts:
+        - name: velocity-plugin-bootstrap
+          mountPath: /work/plugins
+        - name: proxytransfer-patched
+          mountPath: /patched
+      containers:
+      - name: velocity
+        image: itzg/mc-proxy:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 25577
+          name: minecraft
+        env:
+        - name: TYPE
+          value: VELOCITY
+        - name: RCON_PASSWORD
+          value: "noobstersmc-rcon-password-2026"
+        - name: TRANSFER_TARGET
+          value: "192.168.4.33:25577"
+        volumeMounts:
+        - name: velocity-plugin-bootstrap
+          mountPath: /plugins
+        - name: velocity-config
+          mountPath: /config/velocity.toml
+          subPath: velocity.toml
+        - name: forwarding-secret
+          mountPath: /etc/velocity-secret/forwarding.secret
+          subPath: forwarding.secret
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/bash
+              - -ec
+              - |
+                touch /tmp/draining
+                sleep 10
+                rcon-cli --host 127.0.0.1 --port 25575 --password "${RCON_PASSWORD}" "draintransfer ${TRANSFER_TARGET} all 3" || true
+                sleep 8
+                rcon-cli --host 127.0.0.1 --port 25575 --password "${RCON_PASSWORD}" "transfer ${TRANSFER_TARGET} all" || true
+                sleep 30
+        readinessProbe:
+          exec:
+            command:
+            - /bin/bash
+            - -ec
+            - |
+              test ! -f /tmp/draining
+              exec 3<>/dev/tcp/127.0.0.1/25577
+              exec 3<&-
+              exec 3>&-
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          tcpSocket:
+            port: minecraft
+          initialDelaySeconds: 30
+          periodSeconds: 20
+      volumes:
+      - name: velocity-plugin-bootstrap
+        emptyDir: {}
+      - name: proxytransfer-patched
+        configMap:
+          name: proxytransfer-patched
+      - name: velocity-config
+        configMap:
+          name: velocity-config-2
+      - name: forwarding-secret
+        secret:
+          secretName: velocity-forwarding-secret
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: velocity-3
+  namespace: minecraft
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: velocity
+      proxy-id: "3"
+  template:
+    metadata:
+      labels:
+        app: velocity
+        proxy-id: "3"
+    spec:
+      terminationGracePeriodSeconds: 120
+      initContainers:
+      - name: install-transfer-plugins
+        image: curlimages/curl:8.12.1
+        envFrom:
+        - secretRef:
+            name: luckperms-db
+        command:
+        - /bin/sh
+        - -ec
+        - |
+          mkdir -p /work/plugins/velocityrcon
+          mkdir -p /work/plugins/luckperms
+          cp /patched/ProxyTransfer-1.0.jar /work/plugins/ProxyTransfer-1.0.jar
+          curl -fsSL -o /work/plugins/LuckPerms-Velocity-5.5.17.jar "https://cdn.modrinth.com/data/Vebnzrzj/versions/GZjsuCmU/LuckPerms-Velocity-5.5.17.jar"
+          curl -fsSL -o /work/plugins/Tribufu-VelocityRcon-1.2.0.jar "https://mvn.tribufu.com/releases/com/tribufu/Tribufu-VelocityRcon/1.2.0/Tribufu-VelocityRcon-1.2.0.jar"
+          cat > /work/plugins/luckperms/config.yml <<LPCONF
+          storage-method: postgresql
+          data:
+            address: luckperms-postgres.minecraft.svc.cluster.local:5432
+            database: ${POSTGRES_DB}
+            username: ${POSTGRES_USER}
+            password: ${POSTGRES_PASSWORD}
+          LPCONF
+          cat > /work/plugins/velocityrcon/rcon.toml <<'RCONF'
+          rcon-host = "0.0.0.0"
+          rcon-port = "25575"
+          rcon-password = "noobstersmc-rcon-password-2026"
+          rcon-colored = false
+          RCONF
+        volumeMounts:
+        - name: velocity-plugin-bootstrap
+          mountPath: /work/plugins
+        - name: proxytransfer-patched
+          mountPath: /patched
+      containers:
+      - name: velocity
+        image: itzg/mc-proxy:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 25577
+          name: minecraft
+        env:
+        - name: TYPE
+          value: VELOCITY
+        - name: RCON_PASSWORD
+          value: "noobstersmc-rcon-password-2026"
+        - name: TRANSFER_TARGET
+          value: "192.168.4.33:25577"
+        volumeMounts:
+        - name: velocity-plugin-bootstrap
+          mountPath: /plugins
+        - name: velocity-config
+          mountPath: /config/velocity.toml
+          subPath: velocity.toml
+        - name: forwarding-secret
+          mountPath: /etc/velocity-secret/forwarding.secret
+          subPath: forwarding.secret
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/bash
+              - -ec
+              - |
+                touch /tmp/draining
+                sleep 10
+                rcon-cli --host 127.0.0.1 --port 25575 --password "${RCON_PASSWORD}" "draintransfer ${TRANSFER_TARGET} all 3" || true
+                sleep 8
+                rcon-cli --host 127.0.0.1 --port 25575 --password "${RCON_PASSWORD}" "transfer ${TRANSFER_TARGET} all" || true
+                sleep 30
+        readinessProbe:
+          exec:
+            command:
+            - /bin/bash
+            - -ec
+            - |
+              test ! -f /tmp/draining
+              exec 3<>/dev/tcp/127.0.0.1/25577
+              exec 3<&-
+              exec 3>&-
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          tcpSocket:
+            port: minecraft
+          initialDelaySeconds: 30
+          periodSeconds: 20
+      volumes:
+      - name: velocity-plugin-bootstrap
+        emptyDir: {}
+      - name: proxytransfer-patched
+        configMap:
+          name: proxytransfer-patched
+      - name: velocity-config
+        configMap:
+          name: velocity-config-3
+      - name: forwarding-secret
+        secret:
+          secretName: velocity-forwarding-secret
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: velocity-lb-config
+  namespace: minecraft
+data:
+  haproxy.cfg: |
+    global
+      maxconn 2048
+      log stdout format raw local0
+
+    defaults
+      mode tcp
+      timeout connect 5s
+      timeout client 1m
+      timeout server 1m
+      option tcplog
+
+    frontend minecraft_in
+      bind *:25577
+      default_backend velocity_backends
+
+    backend velocity_backends
+      balance roundrobin
+      server proxy1 velocity-proxy-1.minecraft.svc.cluster.local:25577 check
+      server proxy2 velocity-proxy-2.minecraft.svc.cluster.local:25577 check
+      server proxy3 velocity-proxy-3.minecraft.svc.cluster.local:25577 check
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: velocity-lb
+  namespace: minecraft
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: velocity-lb
+  template:
+    metadata:
+      labels:
+        app: velocity-lb
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: haproxy
+        image: haproxy:2.9-alpine
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 25577
+          name: minecraft
+        volumeMounts:
+        - name: config
+          mountPath: /usr/local/etc/haproxy/haproxy.cfg
+          subPath: haproxy.cfg
+        readinessProbe:
+          tcpSocket:
+            port: minecraft
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          tcpSocket:
+            port: minecraft
+          initialDelaySeconds: 15
+          periodSeconds: 10
+      volumes:
+      - name: config
+        configMap:
+          name: velocity-lb-config
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: velocity-proxies-pdb
+  namespace: minecraft
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: velocity
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: velocity-lb-pdb
+  namespace: minecraft
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: velocity-lb
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: velocity-proxy
+  namespace: minecraft
+spec:
+  type: NodePort
+  selector:
+    app: velocity-lb
+  ports:
+  - name: minecraft
+    port: 25577
+    targetPort: minecraft
+    nodePort: 31577
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: velocity-proxy-1
+  namespace: minecraft
+spec:
+  type: ClusterIP
+  selector:
+    app: velocity
+    proxy-id: "1"
+  ports:
+  - name: minecraft
+    port: 25577
+    targetPort: minecraft
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: velocity-proxy-2
+  namespace: minecraft
+spec:
+  type: ClusterIP
+  selector:
+    app: velocity
+    proxy-id: "2"
+  ports:
+  - name: minecraft
+    port: 25577
+    targetPort: minecraft
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: velocity-proxy-3
+  namespace: minecraft
+spec:
+  type: ClusterIP
+  selector:
+    app: velocity
+    proxy-id: "3"
+  ports:
+  - name: minecraft
+    port: 25577
+    targetPort: minecraft
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: luckperms-db
+  namespace: minecraft
+type: Opaque
+stringData:
+  POSTGRES_DB: luckperms
+  POSTGRES_USER: luckperms
+  POSTGRES_PASSWORD: luckperms-strong-password-2026
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: luckperms-postgres-data
+  namespace: minecraft
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: luckperms-postgres
+  namespace: minecraft
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: luckperms-postgres
+  template:
+    metadata:
+      labels:
+        app: luckperms-postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:16-alpine
+        imagePullPolicy: IfNotPresent
+        envFrom:
+        - secretRef:
+            name: luckperms-db
+        ports:
+        - containerPort: 5432
+          name: postgres
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -ec
+            - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -ec
+            - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        volumeMounts:
+        - name: db-data
+          mountPath: /var/lib/postgresql/data
+      volumes:
+      - name: db-data
+        persistentVolumeClaim:
+          claimName: luckperms-postgres-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: luckperms-postgres
+  namespace: minecraft
+spec:
+  selector:
+    app: luckperms-postgres
+  ports:
+  - name: postgres
+    port: 5432
+    targetPort: postgres
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: paper-lobby-data
+  namespace: minecraft
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: paper-survival-data
+  namespace: minecraft
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: paper-creative-data
+  namespace: minecraft
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paper-lobby
+  namespace: minecraft
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: paper-lobby
+  template:
+    metadata:
+      labels:
+        app: paper-lobby
+    spec:
+      containers:
+      - name: minecraft
+        image: itzg/minecraft-server:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 25565
+          name: minecraft
+        env:
+        - name: EULA
+          value: "TRUE"
+        - name: TYPE
+          value: PAPER
+        - name: VERSION
+          value: "1.21.4"
+        - name: ONLINE_MODE
+          value: "FALSE"
+        - name: ACCEPTS_TRANSFERS
+          value: "TRUE"
+        - name: MEMORY
+          value: 1G
+        - name: MOTD
+          value: "Lobby Server"
+        volumeMounts:
+        - name: paper-data
+          mountPath: /data
+        - name: paper-proxy-config
+          mountPath: /config/paper-global.yml
+          subPath: paper-global.yml
+        readinessProbe:
+          tcpSocket:
+            port: minecraft
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket:
+            port: minecraft
+          initialDelaySeconds: 180
+          periodSeconds: 20
+      volumes:
+      - name: paper-data
+        persistentVolumeClaim:
+          claimName: paper-lobby-data
+      - name: paper-proxy-config
+        configMap:
+          name: paper-proxy-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: paper-lobby
+  namespace: minecraft
+spec:
+  selector:
+    app: paper-lobby
+  ports:
+  - name: minecraft
+    port: 25565
+    targetPort: minecraft
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paper-survival
+  namespace: minecraft
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: paper-survival
+  template:
+    metadata:
+      labels:
+        app: paper-survival
+    spec:
+      containers:
+      - name: minecraft
+        image: itzg/minecraft-server:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 25565
+          name: minecraft
+        env:
+        - name: EULA
+          value: "TRUE"
+        - name: TYPE
+          value: PAPER
+        - name: VERSION
+          value: "1.21.4"
+        - name: ONLINE_MODE
+          value: "FALSE"
+        - name: ACCEPTS_TRANSFERS
+          value: "TRUE"
+        - name: MEMORY
+          value: 1G
+        - name: MOTD
+          value: "Survival Server"
+        volumeMounts:
+        - name: paper-data
+          mountPath: /data
+        - name: paper-proxy-config
+          mountPath: /config/paper-global.yml
+          subPath: paper-global.yml
+        readinessProbe:
+          tcpSocket:
+            port: minecraft
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket:
+            port: minecraft
+          initialDelaySeconds: 180
+          periodSeconds: 20
+      volumes:
+      - name: paper-data
+        persistentVolumeClaim:
+          claimName: paper-survival-data
+      - name: paper-proxy-config
+        configMap:
+          name: paper-proxy-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: paper-survival
+  namespace: minecraft
+spec:
+  selector:
+    app: paper-survival
+  ports:
+  - name: minecraft
+    port: 25565
+    targetPort: minecraft
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paper-creative
+  namespace: minecraft
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: paper-creative
+  template:
+    metadata:
+      labels:
+        app: paper-creative
+    spec:
+      containers:
+      - name: minecraft
+        image: itzg/minecraft-server:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 25565
+          name: minecraft
+        env:
+        - name: EULA
+          value: "TRUE"
+        - name: TYPE
+          value: PAPER
+        - name: VERSION
+          value: "1.21.4"
+        - name: ONLINE_MODE
+          value: "FALSE"
+        - name: ACCEPTS_TRANSFERS
+          value: "TRUE"
+        - name: MEMORY
+          value: 1G
+        - name: MOTD
+          value: "Creative Server"
+        volumeMounts:
+        - name: paper-data
+          mountPath: /data
+        - name: paper-proxy-config
+          mountPath: /config/paper-global.yml
+          subPath: paper-global.yml
+        readinessProbe:
+          tcpSocket:
+            port: minecraft
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket:
+            port: minecraft
+          initialDelaySeconds: 180
+          periodSeconds: 20
+      volumes:
+      - name: paper-data
+        persistentVolumeClaim:
+          claimName: paper-creative-data
+      - name: paper-proxy-config
+        configMap:
+          name: paper-proxy-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: paper-creative
+  namespace: minecraft
+spec:
+  selector:
+    app: paper-creative
+  ports:
+  - name: minecraft
+    port: 25565
+    targetPort: minecraft
