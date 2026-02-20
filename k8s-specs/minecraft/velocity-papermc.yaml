@@ -639,18 +639,18 @@ data:
 
     backend velocity_backends
       balance roundrobin
-      server proxy0 velocity-0.velocity-headless.minecraft.svc.cluster.local:25577 check send-proxy
-      server proxy1 velocity-1.velocity-headless.minecraft.svc.cluster.local:25577 check send-proxy
-      server proxy2 velocity-2.velocity-headless.minecraft.svc.cluster.local:25577 check send-proxy
+      server proxy0 velocity-0.velocity-headless.minecraft.svc.cluster.local:25577 send-proxy
+      server proxy1 velocity-1.velocity-headless.minecraft.svc.cluster.local:25577 send-proxy
+      server proxy2 velocity-2.velocity-headless.minecraft.svc.cluster.local:25577 send-proxy
 
     backend velocity_0
-      server proxy0 velocity-0.velocity-headless.minecraft.svc.cluster.local:25577 check send-proxy
+      server proxy0 velocity-0.velocity-headless.minecraft.svc.cluster.local:25577 send-proxy
 
     backend velocity_1
-      server proxy1 velocity-1.velocity-headless.minecraft.svc.cluster.local:25577 check send-proxy
+      server proxy1 velocity-1.velocity-headless.minecraft.svc.cluster.local:25577 send-proxy
 
     backend velocity_2
-      server proxy2 velocity-2.velocity-headless.minecraft.svc.cluster.local:25577 check send-proxy
+      server proxy2 velocity-2.velocity-headless.minecraft.svc.cluster.local:25577 send-proxy
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -969,14 +969,16 @@ spec:
       storage: 10Gi
 ---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: paper-lobby
   namespace: minecraft
 spec:
-  replicas: 1
-  strategy:
-    type: Recreate
+  serviceName: paper-lobby
+  podManagementPolicy: OrderedReady
+  replicas: 2
+  updateStrategy:
+    type: RollingUpdate
   selector:
     matchLabels:
       app: paper-lobby
@@ -985,6 +987,28 @@ spec:
       labels:
         app: paper-lobby
     spec:
+      initContainers:
+      - name: configure-luckperms
+        image: bash:5.2
+        envFrom:
+        - secretRef:
+            name: luckperms-db
+        command:
+        - /usr/local/bin/bash
+        - -ec
+        - |
+          mkdir -p /data/plugins/LuckPerms
+          cat > /data/plugins/LuckPerms/config.yml <<LPCONF
+          storage-method: postgresql
+          data:
+            address: luckperms-postgres.minecraft.svc.cluster.local:5432
+            database: ${POSTGRES_DB}
+            username: ${POSTGRES_USER}
+            password: ${POSTGRES_PASSWORD}
+          LPCONF
+        volumeMounts:
+        - name: paper-data
+          mountPath: /data
       containers:
       - name: minecraft
         image: itzg/minecraft-server:latest
@@ -1007,6 +1031,12 @@ spec:
           value: 1G
         - name: MOTD
           value: "Lobby Server"
+        - name: SPIGET_RESOURCES
+          value: "28140"
+        - name: ENABLE_RCON
+          value: "true"
+        - name: RCON_PASSWORD
+          value: "paper-rcon-password-2026"
         volumeMounts:
         - name: paper-data
           mountPath: /data
@@ -1024,12 +1054,18 @@ spec:
           initialDelaySeconds: 180
           periodSeconds: 20
       volumes:
-      - name: paper-data
-        persistentVolumeClaim:
-          claimName: paper-lobby-data
       - name: paper-proxy-config
         configMap:
           name: paper-proxy-config
+  volumeClaimTemplates:
+  - metadata:
+      name: paper-data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 10Gi
 ---
 apiVersion: v1
 kind: Service
@@ -1061,6 +1097,28 @@ spec:
       labels:
         app: paper-survival
     spec:
+      initContainers:
+      - name: configure-luckperms
+        image: bash:5.2
+        envFrom:
+        - secretRef:
+            name: luckperms-db
+        command:
+        - /usr/local/bin/bash
+        - -ec
+        - |
+          mkdir -p /data/plugins/LuckPerms
+          cat > /data/plugins/LuckPerms/config.yml <<LPCONF
+          storage-method: postgresql
+          data:
+            address: luckperms-postgres.minecraft.svc.cluster.local:5432
+            database: ${POSTGRES_DB}
+            username: ${POSTGRES_USER}
+            password: ${POSTGRES_PASSWORD}
+          LPCONF
+        volumeMounts:
+        - name: paper-data
+          mountPath: /data
       containers:
       - name: minecraft
         image: itzg/minecraft-server:latest
@@ -1083,6 +1141,12 @@ spec:
           value: 1G
         - name: MOTD
           value: "Survival Server"
+        - name: SPIGET_RESOURCES
+          value: "28140"
+        - name: ENABLE_RCON
+          value: "true"
+        - name: RCON_PASSWORD
+          value: "paper-rcon-password-2026"
         volumeMounts:
         - name: paper-data
           mountPath: /data
@@ -1137,6 +1201,28 @@ spec:
       labels:
         app: paper-creative
     spec:
+      initContainers:
+      - name: configure-luckperms
+        image: bash:5.2
+        envFrom:
+        - secretRef:
+            name: luckperms-db
+        command:
+        - /usr/local/bin/bash
+        - -ec
+        - |
+          mkdir -p /data/plugins/LuckPerms
+          cat > /data/plugins/LuckPerms/config.yml <<LPCONF
+          storage-method: postgresql
+          data:
+            address: luckperms-postgres.minecraft.svc.cluster.local:5432
+            database: ${POSTGRES_DB}
+            username: ${POSTGRES_USER}
+            password: ${POSTGRES_PASSWORD}
+          LPCONF
+        volumeMounts:
+        - name: paper-data
+          mountPath: /data
       containers:
       - name: minecraft
         image: itzg/minecraft-server:latest
@@ -1159,6 +1245,12 @@ spec:
           value: 1G
         - name: MOTD
           value: "Creative Server"
+        - name: SPIGET_RESOURCES
+          value: "28140"
+        - name: ENABLE_RCON
+          value: "true"
+        - name: RCON_PASSWORD
+          value: "paper-rcon-password-2026"
         volumeMounts:
         - name: paper-data
           mountPath: /data
