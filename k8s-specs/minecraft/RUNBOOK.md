@@ -62,6 +62,7 @@ kubectl -n minecraft get configmap proxyops-runtime -o jsonpath='{.data.defaultS
 kubectl -n minecraft get pods -o wide
 kubectl -n minecraft get svc velocity-proxy velocity-0-svc velocity-1-svc velocity-2-svc -o wide
 kubectl -n minecraft exec velocity-0 -- rcon-cli --host 127.0.0.1 --port 25575 --password 'noobstersmc-rcon-password-2026' 'proxyops servers'
+kubectl -n minecraft logs velocity-0 | grep -E \"Successfully connected to Redis|RedisBungee initialized successfully\"
 ```
 
 ## Mineflayer client test harness

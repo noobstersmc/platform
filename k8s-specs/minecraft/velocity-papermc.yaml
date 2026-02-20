@@ -201,6 +201,8 @@ spec:
         envFrom:
         - secretRef:
             name: luckperms-db
+        - secretRef:
+            name: redisbungee-redis
         command:
         - /bin/sh
         - -ec
@@ -338,6 +340,8 @@ spec:
         envFrom:
         - secretRef:
             name: luckperms-db
+        - secretRef:
+            name: redisbungee-redis
         command:
         - /bin/sh
         - -ec
@@ -474,6 +478,8 @@ spec:
         envFrom:
         - secretRef:
             name: luckperms-db
+        - secretRef:
+            name: redisbungee-redis
         command:
         - /bin/sh
         - -ec
@@ -482,8 +488,25 @@ spec:
           mkdir -p /work/plugins/luckperms
           cp /patched/ProxyTransfer-1.0.jar /work/plugins/ProxyTransfer-1.0.jar
           cp /ops/ProxyOps.jar /work/plugins/ProxyOps.jar
+          mkdir -p /work/plugins/redisbungee
+          curl -fsSL -o /work/plugins/RedisBungee-Proxy-Velocity-0.12.5-all.jar "https://github.com/ProxioDev/ValioBungee/releases/download/0.12.5/RedisBungee-Proxy-Velocity-0.12.5-all.jar"
           curl -fsSL -o /work/plugins/LuckPerms-Velocity-5.5.17.jar "https://cdn.modrinth.com/data/Vebnzrzj/versions/GZjsuCmU/LuckPerms-Velocity-5.5.17.jar"
           curl -fsSL -o /work/plugins/Tribufu-VelocityRcon-1.2.0.jar "https://mvn.tribufu.com/releases/com/tribufu/Tribufu-VelocityRcon/1.2.0/Tribufu-VelocityRcon-1.2.0.jar"
+          cat > /work/plugins/redisbungee/config.yml <<RBCONF
+          config-version: 2
+          redis-server: redis.minecraft.svc.cluster.local
+          redis-port: 6379
+          redis-password: "${REDIS_PASSWORD}"
+          redis-username: ""
+          network-id: "main"
+          proxy-id: "proxy-1"
+          max-redis-connections: 20
+          useSSL: false
+          cluster-mode-enabled: false
+          kick-when-online: true
+          reconnect-to-last-server: false
+          handle-motd: true
+          RBCONF
           cat > /work/plugins/luckperms/config.yml <<LPCONF
           storage-method: postgresql
           data:
@@ -533,6 +556,12 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        - name: REDISBUNGEE_PROXY_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: REDISBUNGEE_NETWORK_ID
+          value: "main"
         - name: PROXY_WORKLOAD
           value: "velocity"
         - name: PROXY_WORKLOAD_KIND
@@ -911,6 +940,75 @@ spec:
   - name: minecraft
     port: 25577
     targetPort: minecraft
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: redisbungee-redis
+  namespace: minecraft
+type: Opaque
+stringData:
+  REDIS_PASSWORD: redisbungee-strong-password-2026
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: minecraft
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        imagePullPolicy: IfNotPresent
+        envFrom:
+        - secretRef:
+            name: redisbungee-redis
+        command:
+        - sh
+        - -ec
+        - |
+          exec redis-server --appendonly yes --requirepass "$REDIS_PASSWORD"
+        ports:
+        - containerPort: 6379
+          name: redis
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -ec
+            - redis-cli -a "$REDIS_PASSWORD" ping | grep -q PONG
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -ec
+            - redis-cli -a "$REDIS_PASSWORD" ping | grep -q PONG
+          initialDelaySeconds: 20
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: minecraft
+spec:
+  selector:
+    app: redis
+  ports:
+  - name: redis
+    port: 6379
+    targetPort: redis
 ---
 apiVersion: v1
 kind: Secret

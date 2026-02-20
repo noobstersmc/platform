@@ -35,6 +35,13 @@ For end-to-end operational steps, see `minecraft/RUNBOOK.md`.
   - Services labeled `mc.noobsters.net/velocity-discovery=enabled`
   - Names are short pod-aware names (for example `lobby-0-3ed187`)
 
+## Redis sync for proxy presence/counts
+- Redis service: `svc/redis` (`deployment/redis`)
+- Velocity runs `RedisBungee-Proxy-Velocity` on each proxy pod.
+- RedisBungee config path in pod: `/plugins/redisbungee/config.yml`
+- Verify RedisBungee init:
+  - `kubectl -n minecraft logs velocity-0 | grep -E \"Successfully connected to Redis|RedisBungee initialized successfully\"`
+
 ## Static vs dynamic backends
 - Velocity static config keeps only `limbo`.
 - Gameplay servers (`lobby-*`, `survival-*`, `creative-*`) are dynamic.

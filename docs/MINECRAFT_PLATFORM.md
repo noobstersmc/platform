@@ -8,6 +8,7 @@
 - `deployment/paper-creative` (1 replica)
 - `deployment/paper-limbo` (1 replica)
 - `deployment/luckperms-postgres` (1 replica)
+- `deployment/redis` (1 replica, RedisBungee transport)
 
 ## Traffic model
 - Client entrypoint is `svc/velocity-proxy` (`NodePort`).
@@ -45,6 +46,7 @@
 
 ## Proxy plugins
 - `proxytransfer`: draining title/countdown + transfer command during pod shutdown.
+- `redisbungee`: cross-proxy network presence + synchronized MOTD/player-count view.
 - `proxyops`:
   - `/proxyops where`
   - `/proxyops list`
