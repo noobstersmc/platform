@@ -656,6 +656,12 @@ spec:
         ports:
         - containerPort: 25577
           name: minecraft
+        - containerPort: 25578
+          name: proxy0
+        - containerPort: 25579
+          name: proxy1
+        - containerPort: 25580
+          name: proxy2
         volumeMounts:
         - name: config
           mountPath: /usr/local/etc/haproxy/haproxy.cfg
@@ -761,15 +767,15 @@ spec:
     nodePort: 31577
   - name: proxy0
     port: 25578
-    targetPort: proxy0
+    targetPort: 25578
     nodePort: 31578
   - name: proxy1
     port: 25579
-    targetPort: proxy1
+    targetPort: 25579
     nodePort: 31579
   - name: proxy2
     port: 25580
-    targetPort: proxy2
+    targetPort: 25580
     nodePort: 31580
 ---
 apiVersion: v1

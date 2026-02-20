@@ -25,6 +25,12 @@ kubectl -n minecraft port-forward --address 0.0.0.0 svc/velocity-proxy 25577:255
 
 Players connect to `<host-lan-ip>:25577`.
 
+To expose pinned proxy routes too:
+```bash
+kubectl -n minecraft port-forward --address 0.0.0.0 svc/velocity-proxy \
+  25577:25577 25578:25578 25579:25579 25580:25580
+```
+
 ## Restart all deployments
 ```bash
 kubectl -n minecraft get deploy -o name | xargs -r kubectl -n minecraft rollout restart
@@ -56,6 +62,19 @@ kubectl -n minecraft get svc velocity-proxy velocity-proxy-1 velocity-proxy-2 ve
 kubectl -n minecraft get pods -o wide
 kubectl -n minecraft get pdb
 ```
+
+## DNS (Cloudflare) for clean hostnames
+- Use `DNS only` records (gray cloud).
+- A records to the same LB/public IP:
+  - `play.internal.noobsters.net`
+  - `proxy0.internal.noobsters.net`
+  - `proxy1.internal.noobsters.net`
+  - `proxy2.internal.noobsters.net`
+- SRV records:
+  - `_minecraft._tcp.play.internal.noobsters.net` -> `play.internal.noobsters.net:25577`
+  - `_minecraft._tcp.proxy0.internal.noobsters.net` -> `proxy0.internal.noobsters.net:25578`
+  - `_minecraft._tcp.proxy1.internal.noobsters.net` -> `proxy1.internal.noobsters.net:25579`
+  - `_minecraft._tcp.proxy2.internal.noobsters.net` -> `proxy2.internal.noobsters.net:25580`
 
 ## Known limitations
 - Existing TCP sessions to a pod that is terminating can still drop if transfer cannot complete in time.
