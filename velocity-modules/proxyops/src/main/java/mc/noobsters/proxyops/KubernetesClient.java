@@ -99,12 +99,16 @@ public class KubernetesClient {
         return out;
     }
 
-    public boolean restartDeployment(String namespace, String deployment, String timestamp) {
+    public boolean restartWorkload(String namespace, String workloadName, String workloadKind, String timestamp) {
         if (bearer.isBlank()) {
             return false;
         }
         try {
-            String path = "/apis/apps/v1/namespaces/" + namespace + "/deployments/" + deployment;
+            String resource = "deployments";
+            if ("statefulset".equalsIgnoreCase(workloadKind) || "statefulsets".equalsIgnoreCase(workloadKind)) {
+                resource = "statefulsets";
+            }
+            String path = "/apis/apps/v1/namespaces/" + namespace + "/" + resource + "/" + workloadName;
             String body = "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"kubectl.kubernetes.io/restartedAt\":\""
                     + timestamp + "\"}}}}}";
             HttpRequest req = HttpRequest.newBuilder(URI.create("https://kubernetes.default.svc" + path))
@@ -117,10 +121,10 @@ public class KubernetesClient {
             if (res.statusCode() >= 200 && res.statusCode() < 300) {
                 return true;
             }
-            logger.error("Deployment restart PATCH failed: {} {}", res.statusCode(), res.body());
+            logger.error("Workload restart PATCH failed: {} {}", res.statusCode(), res.body());
             return false;
         } catch (Exception e) {
-            logger.error("Failed to restart deployment", e);
+            logger.error("Failed to restart workload", e);
             return false;
         }
     }

@@ -5,7 +5,12 @@ For end-to-end operational steps, see `minecraft/RUNBOOK.md`.
 ## Entry points
 - Load-balanced proxy service: `svc/velocity-proxy`
 - Proxy-specific services: `svc/velocity-proxy-1`, `svc/velocity-proxy-2`, `svc/velocity-proxy-3` (internal-only `ClusterIP`)
-- Active proxy deployment: `velocity-3` with 3 replicas (`velocity-1/2` kept scaled to 0).
+- Active proxy workload: `statefulset/velocity` with 3 replicas (`velocity-0/1/2`)
+- External NodePorts on `svc/velocity-proxy`:
+  - `31577` -> round-robin LB
+  - `31578` -> pinned `velocity-0`
+  - `31579` -> pinned `velocity-1`
+  - `31580` -> pinned `velocity-2`
 
 ## Local/LAN access
 ```bash

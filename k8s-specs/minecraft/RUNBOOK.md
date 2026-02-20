@@ -35,10 +35,8 @@ done
 
 ## Drain-aware proxy rollout test
 ```bash
-kubectl -n minecraft rollout restart deploy/velocity-1 deploy/velocity-2 deploy/velocity-3
-kubectl -n minecraft rollout status deploy/velocity-1 --timeout=180s
-kubectl -n minecraft rollout status deploy/velocity-2 --timeout=180s
-kubectl -n minecraft rollout status deploy/velocity-3 --timeout=180s
+kubectl -n minecraft rollout restart statefulset/velocity
+kubectl -n minecraft rollout status statefulset/velocity --timeout=300s
 ```
 
 Expected behavior:

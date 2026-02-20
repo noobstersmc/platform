@@ -225,6 +225,12 @@ spec:
         ports:
         - containerPort: 25577
           name: minecraft
+        - containerPort: 25578
+          name: proxy0
+        - containerPort: 25579
+          name: proxy1
+        - containerPort: 25580
+          name: proxy2
         env:
         - name: TYPE
           value: VELOCITY
@@ -408,17 +414,16 @@ spec:
           secretName: velocity-forwarding-secret
 ---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
-  name: velocity-3
+  name: velocity
   namespace: minecraft
 spec:
+  serviceName: velocity-headless
+  podManagementPolicy: OrderedReady
   replicas: 3
-  strategy:
+  updateStrategy:
     type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
   selector:
     matchLabels:
       app: velocity
@@ -501,10 +506,22 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-        - name: PROXY_DEPLOYMENT
-          value: "velocity-3"
+        - name: PROXY_WORKLOAD
+          value: "velocity"
+        - name: PROXY_WORKLOAD_KIND
+          value: "statefulset"
         - name: PROXY_PORT
           value: "25577"
+        - name: PROXY_TRANSFER_HOST
+          value: "192.168.4.33"
+        - name: PROXY_TRANSFER_PORT
+          value: "25577"
+        - name: PROXY_TARGET_HOST
+          value: "192.168.4.33"
+        - name: PROXY_TARGET_BASE_PORT
+          value: "25578"
+        - name: PROXY_HAPROXY_PROTOCOL_REQUIRED
+          value: "true"
         volumeMounts:
         - name: velocity-plugin-bootstrap
           mountPath: /plugins
@@ -584,9 +601,32 @@ data:
       bind *:25577
       default_backend velocity_backends
 
+    frontend proxy0_in
+      bind *:25578
+      default_backend velocity_0
+
+    frontend proxy1_in
+      bind *:25579
+      default_backend velocity_1
+
+    frontend proxy2_in
+      bind *:25580
+      default_backend velocity_2
+
     backend velocity_backends
       balance roundrobin
-      server proxy3 velocity-proxy-3.minecraft.svc.cluster.local:25577 check send-proxy
+      server proxy0 velocity-0.velocity-headless.minecraft.svc.cluster.local:25577 check send-proxy
+      server proxy1 velocity-1.velocity-headless.minecraft.svc.cluster.local:25577 check send-proxy
+      server proxy2 velocity-2.velocity-headless.minecraft.svc.cluster.local:25577 check send-proxy
+
+    backend velocity_0
+      server proxy0 velocity-0.velocity-headless.minecraft.svc.cluster.local:25577 check send-proxy
+
+    backend velocity_1
+      server proxy1 velocity-1.velocity-headless.minecraft.svc.cluster.local:25577 check send-proxy
+
+    backend velocity_2
+      server proxy2 velocity-2.velocity-headless.minecraft.svc.cluster.local:25577 check send-proxy
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -645,6 +685,7 @@ spec:
   selector:
     matchLabels:
       app: velocity
+---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -672,7 +713,7 @@ rules:
   resources: ["pods"]
   verbs: ["get", "list"]
 - apiGroups: ["apps"]
-  resources: ["deployments"]
+  resources: ["deployments", "statefulsets"]
   verbs: ["get", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -692,6 +733,21 @@ roleRef:
 apiVersion: v1
 kind: Service
 metadata:
+  name: velocity-headless
+  namespace: minecraft
+spec:
+  clusterIP: None
+  selector:
+    app: velocity
+    proxy-id: "3"
+  ports:
+  - name: minecraft
+    port: 25577
+    targetPort: minecraft
+---
+apiVersion: v1
+kind: Service
+metadata:
   name: velocity-proxy
   namespace: minecraft
 spec:
@@ -703,6 +759,18 @@ spec:
     port: 25577
     targetPort: minecraft
     nodePort: 31577
+  - name: proxy0
+    port: 25578
+    targetPort: proxy0
+    nodePort: 31578
+  - name: proxy1
+    port: 25579
+    targetPort: proxy1
+    nodePort: 31579
+  - name: proxy2
+    port: 25580
+    targetPort: proxy2
+    nodePort: 31580
 ---
 apiVersion: v1
 kind: Service

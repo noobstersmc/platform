@@ -19,6 +19,8 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Plugin(id = "proxyops", name = "ProxyOps", version = "0.1.0", authors = {"noobstersmc"})
 public class ProxyOpsPlugin {
@@ -27,7 +29,13 @@ public class ProxyOpsPlugin {
     private final String podName;
     private final int proxyPort;
     private final String namespace;
-    private final String deployment;
+    private final String workload;
+    private final String workloadKind;
+    private final String transferHost;
+    private final int transferPort;
+    private final String targetHost;
+    private final int targetBasePort;
+    private final boolean haproxyProtocolRequired;
     private KubernetesClient k8s;
 
     @Inject
@@ -37,7 +45,13 @@ public class ProxyOpsPlugin {
         this.podName = envOr("POD_NAME", "unknown-pod");
         this.proxyPort = Integer.parseInt(envOr("PROXY_PORT", "25577"));
         this.namespace = envOr("POD_NAMESPACE", "minecraft");
-        this.deployment = envOr("PROXY_DEPLOYMENT", "velocity-3");
+        this.workload = envOr("PROXY_WORKLOAD", "velocity");
+        this.workloadKind = envOr("PROXY_WORKLOAD_KIND", "statefulset");
+        this.transferHost = envOr("PROXY_TRANSFER_HOST", "");
+        this.transferPort = Integer.parseInt(envOr("PROXY_TRANSFER_PORT", String.valueOf(proxyPort)));
+        this.targetHost = envOr("PROXY_TARGET_HOST", transferHost);
+        this.targetBasePort = Integer.parseInt(envOr("PROXY_TARGET_BASE_PORT", "25578"));
+        this.haproxyProtocolRequired = Boolean.parseBoolean(envOr("PROXY_HAPROXY_PROTOCOL_REQUIRED", "true"));
     }
 
     @Subscribe
@@ -128,6 +142,30 @@ public class ProxyOpsPlugin {
                 inv.source().sendMessage(Component.text("You are already on this proxy pod.", NamedTextColor.YELLOW));
                 return;
             }
+            if (haproxyProtocolRequired) {
+                Integer ordinal = parseOrdinal(pod.name());
+                if (ordinal != null && !targetHost.isBlank()) {
+                    int targetPort = targetBasePort + ordinal;
+                    player.transferToHost(InetSocketAddress.createUnresolved(targetHost, targetPort));
+                    inv.source().sendMessage(Component.text(
+                            "Transferring you to " + pod.name() + " via " + targetHost + ":" + targetPort,
+                            NamedTextColor.GREEN));
+                    return;
+                }
+                if (transferHost.isBlank()) {
+                    inv.source().sendMessage(Component.text(
+                            "Direct pod transfer is disabled: this proxy requires HAProxy PROXY protocol.",
+                            NamedTextColor.RED));
+                    return;
+                }
+                player.transferToHost(InetSocketAddress.createUnresolved(transferHost, transferPort));
+                inv.source().sendMessage(Component.text(
+                        "Transferring via LB " + transferHost + ":" + transferPort +
+                                " (cannot pin exact pod when HAProxy protocol is enabled).",
+                        NamedTextColor.GREEN));
+                return;
+            }
+
             player.transferToHost(InetSocketAddress.createUnresolved(pod.podIp(), proxyPort));
             inv.source().sendMessage(Component.text("Transferring you to " + pod.name(), NamedTextColor.GREEN));
         }
@@ -137,9 +175,9 @@ public class ProxyOpsPlugin {
                 inv.source().sendMessage(Component.text("Missing permission: proxyops.update", NamedTextColor.RED));
                 return;
             }
-            boolean ok = k8s.restartDeployment(namespace, deployment, Instant.now().toString());
+            boolean ok = k8s.restartWorkload(namespace, workload, workloadKind, Instant.now().toString());
             if (ok) {
-                inv.source().sendMessage(Component.text("Triggered rollout restart for " + deployment, NamedTextColor.GREEN));
+                inv.source().sendMessage(Component.text("Triggered rollout restart for " + workloadKind + "/" + workload, NamedTextColor.GREEN));
             } else {
                 inv.source().sendMessage(Component.text("Failed to trigger rollout restart. Check plugin logs.", NamedTextColor.RED));
             }
@@ -166,6 +204,18 @@ public class ProxyOpsPlugin {
                 return out;
             }
             return List.of();
+        }
+
+        private Integer parseOrdinal(String pod) {
+            Matcher m = Pattern.compile(".*-(\\d+)$").matcher(pod);
+            if (!m.matches()) {
+                return null;
+            }
+            try {
+                return Integer.parseInt(m.group(1));
+            } catch (NumberFormatException e) {
+                return null;
+            }
         }
     }
 }

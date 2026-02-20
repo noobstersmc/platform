@@ -17,8 +17,13 @@ Aliases: `/proxy`, `/pops`
 ## Runtime env vars
 - `POD_NAME` (required for accurate `where` output)
 - `POD_NAMESPACE` (default: `minecraft`)
-- `PROXY_DEPLOYMENT` (default: `velocity-3`)
+- `PROXY_WORKLOAD` (default: `velocity`)
+- `PROXY_WORKLOAD_KIND` (`deployment` or `statefulset`, default: `statefulset`)
 - `PROXY_PORT` (default: `25577`)
+- `PROXY_TRANSFER_HOST` (normal LB host)
+- `PROXY_TRANSFER_PORT` (normal LB port, default `25577`)
+- `PROXY_TARGET_HOST` (targeted LB host)
+- `PROXY_TARGET_BASE_PORT` (default `25578`, maps to pod ordinal)
 
 ## Build
 ```bash
