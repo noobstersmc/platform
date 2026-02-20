@@ -19,7 +19,7 @@ kubectl -n minecraft port-forward --address 0.0.0.0 svc/velocity-proxy 25577:255
 
 ## Roll restart proxies
 ```bash
-kubectl -n minecraft rollout restart deploy/velocity-1 deploy/velocity-2 deploy/velocity-3
+kubectl -n minecraft rollout restart statefulset/velocity
 ```
 
 ## Watch rollout
