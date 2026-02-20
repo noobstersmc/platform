@@ -47,7 +47,7 @@ data:
     login-ratelimit = 3000
     connection-timeout = 5000
     read-timeout = 30000
-    haproxy-protocol = false
+    haproxy-protocol = true
     tcp-fast-open = false
     bungee-plugin-message-channel = true
     show-ping-requests = false
@@ -92,7 +92,7 @@ data:
     login-ratelimit = 3000
     connection-timeout = 5000
     read-timeout = 30000
-    haproxy-protocol = false
+    haproxy-protocol = true
     tcp-fast-open = false
     bungee-plugin-message-channel = true
     show-ping-requests = false
@@ -137,7 +137,7 @@ data:
     login-ratelimit = 3000
     connection-timeout = 5000
     read-timeout = 30000
-    haproxy-protocol = false
+    haproxy-protocol = true
     tcp-fast-open = false
     bungee-plugin-message-channel = true
     show-ping-requests = false
@@ -554,9 +554,9 @@ data:
 
     backend velocity_backends
       balance roundrobin
-      server proxy1 velocity-proxy-1.minecraft.svc.cluster.local:25577 check
-      server proxy2 velocity-proxy-2.minecraft.svc.cluster.local:25577 check
-      server proxy3 velocity-proxy-3.minecraft.svc.cluster.local:25577 check
+      server proxy1 velocity-proxy-1.minecraft.svc.cluster.local:25577 check send-proxy
+      server proxy2 velocity-proxy-2.minecraft.svc.cluster.local:25577 check send-proxy
+      server proxy3 velocity-proxy-3.minecraft.svc.cluster.local:25577 check send-proxy
 ---
 apiVersion: apps/v1
 kind: Deployment
