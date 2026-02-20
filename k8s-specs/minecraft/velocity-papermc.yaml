@@ -538,6 +538,16 @@ spec:
           value: "25578"
         - name: PROXY_HAPROXY_PROTOCOL_REQUIRED
           value: "true"
+        - name: PROXY_DISCOVERY_ENABLED
+          value: "true"
+        - name: PROXY_DISCOVERY_LABEL_KEY
+          value: "mc.noobsters.net/velocity-discovery"
+        - name: PROXY_DISCOVERY_LABEL_VALUE
+          value: "enabled"
+        - name: PROXY_DISCOVERY_NAME_PREFIX
+          value: "auto-"
+        - name: PROXY_DISCOVERY_INTERVAL_SECONDS
+          value: "5"
         volumeMounts:
         - name: velocity-plugin-bootstrap
           mountPath: /plugins
@@ -740,7 +750,7 @@ metadata:
   namespace: minecraft
 rules:
 - apiGroups: [""]
-  resources: ["pods"]
+  resources: ["pods", "services", "endpoints"]
   verbs: ["get", "list"]
 - apiGroups: ["apps"]
   resources: ["deployments", "statefulsets"]
@@ -1072,6 +1082,10 @@ kind: Service
 metadata:
   name: paper-lobby
   namespace: minecraft
+  labels:
+    mc.noobsters.net/velocity-discovery: "enabled"
+  annotations:
+    mc.noobsters.net/velocity-server-name: lobby
 spec:
   selector:
     app: paper-lobby
@@ -1176,6 +1190,10 @@ kind: Service
 metadata:
   name: paper-survival
   namespace: minecraft
+  labels:
+    mc.noobsters.net/velocity-discovery: "enabled"
+  annotations:
+    mc.noobsters.net/velocity-server-name: survival
 spec:
   selector:
     app: paper-survival
@@ -1280,6 +1298,10 @@ kind: Service
 metadata:
   name: paper-creative
   namespace: minecraft
+  labels:
+    mc.noobsters.net/velocity-discovery: "enabled"
+  annotations:
+    mc.noobsters.net/velocity-server-name: creative
 spec:
   selector:
     app: paper-creative

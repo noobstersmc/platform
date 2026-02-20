@@ -9,16 +9,23 @@ import com.velocitypowered.api.permission.Tristate;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
+import com.velocitypowered.api.proxy.server.RegisteredServer;
+import com.velocitypowered.api.proxy.server.ServerInfo;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.slf4j.Logger;
 
 import java.net.InetSocketAddress;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -36,6 +43,12 @@ public class ProxyOpsPlugin {
     private final String targetHost;
     private final int targetBasePort;
     private final boolean haproxyProtocolRequired;
+    private final boolean discoveryEnabled;
+    private final String discoveryLabelKey;
+    private final String discoveryLabelValue;
+    private final String discoveryNamePrefix;
+    private final long discoveryIntervalSeconds;
+    private final Set<String> managedDiscoveredServers = new HashSet<>();
     private KubernetesClient k8s;
 
     @Inject
@@ -52,6 +65,11 @@ public class ProxyOpsPlugin {
         this.targetHost = envOr("PROXY_TARGET_HOST", transferHost);
         this.targetBasePort = Integer.parseInt(envOr("PROXY_TARGET_BASE_PORT", "25578"));
         this.haproxyProtocolRequired = Boolean.parseBoolean(envOr("PROXY_HAPROXY_PROTOCOL_REQUIRED", "true"));
+        this.discoveryEnabled = Boolean.parseBoolean(envOr("PROXY_DISCOVERY_ENABLED", "true"));
+        this.discoveryLabelKey = envOr("PROXY_DISCOVERY_LABEL_KEY", "mc.noobsters.net/velocity-discovery");
+        this.discoveryLabelValue = envOr("PROXY_DISCOVERY_LABEL_VALUE", "enabled");
+        this.discoveryNamePrefix = envOr("PROXY_DISCOVERY_NAME_PREFIX", "auto-");
+        this.discoveryIntervalSeconds = Long.parseLong(envOr("PROXY_DISCOVERY_INTERVAL_SECONDS", "5"));
     }
 
     @Subscribe
@@ -63,6 +81,49 @@ public class ProxyOpsPlugin {
                 .build();
         proxy.getCommandManager().register(meta, new ProxyOpsCommand());
         logger.info("ProxyOps loaded on pod {}", podName);
+        if (discoveryEnabled) {
+            syncDiscoveredServers();
+            proxy.getScheduler().buildTask(this, this::syncDiscoveredServers)
+                    .repeat(Duration.ofSeconds(Math.max(3, discoveryIntervalSeconds)))
+                    .schedule();
+            logger.info("ProxyOps discovery enabled: label {}={}", discoveryLabelKey, discoveryLabelValue);
+        }
+    }
+
+    private synchronized void syncDiscoveredServers() {
+        List<KubernetesClient.BackendRef> refs = k8s.listDiscoverableBackends(namespace, discoveryLabelKey, discoveryLabelValue);
+        Map<String, ServerInfo> desired = new HashMap<>();
+        for (KubernetesClient.BackendRef ref : refs) {
+            if (ref.readyEndpoints() <= 0) {
+                continue;
+            }
+            String name = discoveryNamePrefix + ref.name();
+            ServerInfo info = new ServerInfo(name, InetSocketAddress.createUnresolved(ref.host(), ref.port()));
+            desired.put(name, info);
+        }
+
+        for (ServerInfo info : desired.values()) {
+            Optional<RegisteredServer> existing = proxy.getServer(info.getName());
+            if (existing.isPresent()) {
+                InetSocketAddress old = existing.get().getServerInfo().getAddress();
+                if (old.getHostString().equals(info.getAddress().getHostString()) && old.getPort() == info.getAddress().getPort()) {
+                    managedDiscoveredServers.add(info.getName());
+                    continue;
+                }
+                proxy.unregisterServer(existing.get().getServerInfo());
+            }
+            proxy.registerServer(info);
+            managedDiscoveredServers.add(info.getName());
+        }
+
+        List<String> stale = managedDiscoveredServers.stream()
+                .filter(name -> !desired.containsKey(name))
+                .toList();
+        for (String name : stale) {
+            Optional<RegisteredServer> existing = proxy.getServer(name);
+            existing.ifPresent(server -> proxy.unregisterServer(server.getServerInfo()));
+            managedDiscoveredServers.remove(name);
+        }
     }
 
     private String envOr(String key, String def) {
@@ -83,6 +144,7 @@ public class ProxyOpsPlugin {
                 case "list" -> list(invocation);
                 case "go" -> go(invocation);
                 case "update" -> update(invocation);
+                case "servers" -> servers(invocation);
                 default -> usage(invocation);
             }
         }
@@ -93,7 +155,7 @@ public class ProxyOpsPlugin {
         }
 
         private void usage(Invocation inv) {
-            inv.source().sendMessage(Component.text("/proxyops where | list | go <pod-name> | update", NamedTextColor.YELLOW));
+            inv.source().sendMessage(Component.text("/proxyops where | list | servers | go <pod-name> | update", NamedTextColor.YELLOW));
         }
 
         private void where(Invocation inv) {
@@ -183,14 +245,30 @@ public class ProxyOpsPlugin {
             }
         }
 
+        private void servers(Invocation inv) {
+            List<String> names = proxy.getAllServers().stream()
+                    .map(rs -> rs.getServerInfo().getName())
+                    .filter(n -> n.startsWith(discoveryNamePrefix))
+                    .sorted()
+                    .toList();
+            if (names.isEmpty()) {
+                inv.source().sendMessage(Component.text("No discovered backends currently registered.", NamedTextColor.YELLOW));
+                return;
+            }
+            inv.source().sendMessage(Component.text("Discovered backends:", NamedTextColor.AQUA));
+            for (String n : names) {
+                inv.source().sendMessage(Component.text("- " + n, NamedTextColor.GRAY));
+            }
+        }
+
         @Override
         public List<String> suggest(Invocation invocation) {
             String[] args = invocation.arguments();
             if (args.length == 0) {
-                return List.of("where", "list", "go", "update");
+                return List.of("where", "list", "servers", "go", "update");
             }
             if (args.length == 1) {
-                return List.of("where", "list", "go", "update").stream()
+                return List.of("where", "list", "servers", "go", "update").stream()
                         .filter(s -> s.startsWith(args[0].toLowerCase()))
                         .toList();
             }

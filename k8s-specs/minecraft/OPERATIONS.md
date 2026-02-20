@@ -43,9 +43,13 @@ kubectl -n minecraft get pods -l app=velocity -w
 - Commands:
   - `/proxyops where`
   - `/proxyops list`
+  - `/proxyops servers`
   - `/proxyops go <pod-name>`
   - `/proxyops update`
 - Aliases: `/proxy`, `/pops`
+- Dynamic backend discovery:
+  - Velocity auto-registers services labeled `mc.noobsters.net/velocity-discovery=enabled`
+  - Registered names are prefixed with `auto-` by default
 
 ## Auth and forwarding (Velocity modern forwarding)
 - Velocity is `online-mode=true`.

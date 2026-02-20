@@ -23,6 +23,8 @@ import java.security.cert.CertificateFactory;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
 
 public class KubernetesClient {
     private static final String SA_ROOT = "/var/run/secrets/kubernetes.io/serviceaccount";
@@ -95,6 +97,85 @@ public class KubernetesClient {
             }
         } catch (Exception e) {
             logger.error("Failed to list velocity pods", e);
+        }
+        return out;
+    }
+
+    public List<BackendRef> listDiscoverableBackends(String namespace, String labelKey, String labelValue) {
+        List<BackendRef> out = new ArrayList<>();
+        if (bearer.isBlank()) {
+            return out;
+        }
+        try {
+            String selector = URLEncoder.encode(labelKey + "=" + labelValue, StandardCharsets.UTF_8);
+            JsonObject svcRoot = get("/api/v1/namespaces/" + namespace + "/services?labelSelector=" + selector);
+            JsonObject epRoot = get("/api/v1/namespaces/" + namespace + "/endpoints?labelSelector=" + selector);
+            if (svcRoot == null || epRoot == null) {
+                return out;
+            }
+
+            Map<String, Integer> readyByService = new HashMap<>();
+            JsonArray epItems = epRoot.getAsJsonArray("items");
+            if (epItems != null) {
+                for (JsonElement item : epItems) {
+                    JsonObject ep = item.getAsJsonObject();
+                    String name = str(ep, "metadata", "name");
+                    int ready = 0;
+                    JsonArray subsets = ep.getAsJsonArray("subsets");
+                    if (subsets != null) {
+                        for (JsonElement subsetE : subsets) {
+                            JsonObject subset = subsetE.getAsJsonObject();
+                            JsonArray addrs = subset.getAsJsonArray("addresses");
+                            if (addrs != null) {
+                                ready += addrs.size();
+                            }
+                        }
+                    }
+                    readyByService.put(name, ready);
+                }
+            }
+
+            JsonArray svcItems = svcRoot.getAsJsonArray("items");
+            if (svcItems == null) {
+                return out;
+            }
+            for (JsonElement item : svcItems) {
+                JsonObject svc = item.getAsJsonObject();
+                String svcName = str(svc, "metadata", "name");
+                String configuredName = svcName;
+                JsonObject meta = svc.getAsJsonObject("metadata");
+                if (meta != null) {
+                    JsonObject ann = meta.getAsJsonObject("annotations");
+                    if (ann != null && ann.has("mc.noobsters.net/velocity-server-name")) {
+                        configuredName = ann.get("mc.noobsters.net/velocity-server-name").getAsString();
+                    }
+                }
+
+                int port = 0;
+                JsonArray ports = nested(svc, "spec", "ports");
+                if (ports != null && !ports.isEmpty()) {
+                    for (JsonElement pE : ports) {
+                        JsonObject p = pE.getAsJsonObject();
+                        String pName = str(p, "name");
+                        if ("minecraft".equalsIgnoreCase(pName)) {
+                            port = p.get("port").getAsInt();
+                            break;
+                        }
+                        if (port == 0 && p.has("port")) {
+                            port = p.get("port").getAsInt();
+                        }
+                    }
+                }
+                if (port == 0) {
+                    continue;
+                }
+
+                int ready = readyByService.getOrDefault(svcName, 0);
+                String host = svcName + "." + namespace + ".svc.cluster.local";
+                out.add(new BackendRef(configuredName, host, port, ready));
+            }
+        } catch (Exception e) {
+            logger.error("Failed to list discoverable backends", e);
         }
         return out;
     }
@@ -186,4 +267,5 @@ public class KubernetesClient {
     }
 
     public record PodRef(String name, String podIp, boolean ready) {}
+    public record BackendRef(String name, String host, int port, int readyEndpoints) {}
 }
