@@ -254,11 +254,19 @@ spec:
               - /bin/bash
               - -ec
               - |
+                SELF_ORDINAL="${HOSTNAME##*-}"
+                TARGET_HOST="${PROXY_TARGET_HOST:-192.168.4.33}"
+                case "${SELF_ORDINAL}" in
+                  0) TARGET_PORT=25579 ;;
+                  1) TARGET_PORT=25580 ;;
+                  2) TARGET_PORT=25578 ;;
+                  *) TARGET_PORT=25577 ;;
+                esac
                 touch /tmp/draining
                 sleep 10
-                rcon-cli --host 127.0.0.1 --port 25575 --password "${RCON_PASSWORD}" "draintransfer ${TRANSFER_TARGET} all 3" || true
+                rcon-cli --host 127.0.0.1 --port 25575 --password "${RCON_PASSWORD}" "draintransfer ${TARGET_HOST}:${TARGET_PORT} all 3" || true
                 sleep 8
-                rcon-cli --host 127.0.0.1 --port 25575 --password "${RCON_PASSWORD}" "transfer ${TRANSFER_TARGET} all" || true
+                rcon-cli --host 127.0.0.1 --port 25575 --password "${RCON_PASSWORD}" "transfer ${TARGET_HOST}:${TARGET_PORT} all" || true
                 sleep 30
         readinessProbe:
           exec:
@@ -377,11 +385,19 @@ spec:
               - /bin/bash
               - -ec
               - |
+                SELF_ORDINAL="${HOSTNAME##*-}"
+                TARGET_HOST="${PROXY_TARGET_HOST:-192.168.4.33}"
+                case "${SELF_ORDINAL}" in
+                  0) TARGET_PORT=25579 ;;
+                  1) TARGET_PORT=25580 ;;
+                  2) TARGET_PORT=25578 ;;
+                  *) TARGET_PORT=25577 ;;
+                esac
                 touch /tmp/draining
                 sleep 10
-                rcon-cli --host 127.0.0.1 --port 25575 --password "${RCON_PASSWORD}" "draintransfer ${TRANSFER_TARGET} all 3" || true
+                rcon-cli --host 127.0.0.1 --port 25575 --password "${RCON_PASSWORD}" "draintransfer ${TARGET_HOST}:${TARGET_PORT} all 3" || true
                 sleep 8
-                rcon-cli --host 127.0.0.1 --port 25575 --password "${RCON_PASSWORD}" "transfer ${TRANSFER_TARGET} all" || true
+                rcon-cli --host 127.0.0.1 --port 25575 --password "${RCON_PASSWORD}" "transfer ${TARGET_HOST}:${TARGET_PORT} all" || true
                 sleep 30
         readinessProbe:
           exec:
@@ -538,11 +554,19 @@ spec:
               - /bin/bash
               - -ec
               - |
+                SELF_ORDINAL="${HOSTNAME##*-}"
+                TARGET_HOST="${PROXY_TARGET_HOST:-192.168.4.33}"
+                case "${SELF_ORDINAL}" in
+                  0) TARGET_PORT=25579 ;;
+                  1) TARGET_PORT=25580 ;;
+                  2) TARGET_PORT=25578 ;;
+                  *) TARGET_PORT=25577 ;;
+                esac
                 touch /tmp/draining
                 sleep 10
-                rcon-cli --host 127.0.0.1 --port 25575 --password "${RCON_PASSWORD}" "draintransfer ${TRANSFER_TARGET} all 3" || true
+                rcon-cli --host 127.0.0.1 --port 25575 --password "${RCON_PASSWORD}" "draintransfer ${TARGET_HOST}:${TARGET_PORT} all 3" || true
                 sleep 8
-                rcon-cli --host 127.0.0.1 --port 25575 --password "${RCON_PASSWORD}" "transfer ${TRANSFER_TARGET} all" || true
+                rcon-cli --host 127.0.0.1 --port 25575 --password "${RCON_PASSWORD}" "transfer ${TARGET_HOST}:${TARGET_PORT} all" || true
                 sleep 30
         readinessProbe:
           exec:
