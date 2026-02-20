@@ -33,6 +33,15 @@ kubectl -n minecraft get pods -l app=velocity -w
 - Velocity config has `accepts-transfers = true` for transfer-packet workflows.
 - ProxyTransfer patch source is tracked in `Documents/repos/noobstersmc/velocity-modules/proxytransfer/`.
 
+## ProxyOps plugin
+- Plugin source: `velocity-modules/proxyops/`
+- Commands:
+  - `/proxyops where`
+  - `/proxyops list`
+  - `/proxyops go <pod-name>`
+  - `/proxyops update`
+- Aliases: `/proxy`, `/pops`
+
 ## Auth and forwarding (Velocity modern forwarding)
 - Velocity is `online-mode=true`.
 - Velocity uses `player-info-forwarding-mode="modern"`.

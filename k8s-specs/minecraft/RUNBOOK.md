@@ -10,6 +10,14 @@ kubectl apply -f minecraft/velocity-papermc.yaml
 kubectl -n minecraft get deploy,svc,pods
 ```
 
+If `velocity-modules/proxyops` changed, rebuild and refresh its configmap first:
+```bash
+cd velocity-modules/proxyops
+docker run --rm -v "$PWD":/work -w /work maven:3.9.9-eclipse-temurin-21 mvn -q -DskipTests package
+kubectl -n minecraft delete configmap proxyops-plugin --ignore-not-found
+kubectl -n minecraft create configmap proxyops-plugin --from-file=ProxyOps.jar=target/ProxyOps.jar
+```
+
 ## Expose to LAN
 ```bash
 kubectl -n minecraft port-forward --address 0.0.0.0 svc/velocity-proxy 25577:25577

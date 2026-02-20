@@ -111,7 +111,7 @@ data:
   velocity.toml: |
     config-version = "2.7"
     bind = "0.0.0.0:25577"
-    motd = "Velocity proxy-3"
+    motd = "Velocity __POD_NAME__"
     show-max-players = 500
     online-mode = true
     force-key-authentication = false
@@ -429,10 +429,16 @@ spec:
         app: velocity
         proxy-id: "3"
     spec:
+      serviceAccountName: velocity-proxy-sa
       terminationGracePeriodSeconds: 120
       initContainers:
       - name: install-transfer-plugins
         image: curlimages/curl:8.12.1
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
         envFrom:
         - secretRef:
             name: luckperms-db
@@ -443,6 +449,7 @@ spec:
           mkdir -p /work/plugins/velocityrcon
           mkdir -p /work/plugins/luckperms
           cp /patched/ProxyTransfer-1.0.jar /work/plugins/ProxyTransfer-1.0.jar
+          cp /ops/ProxyOps.jar /work/plugins/ProxyOps.jar
           curl -fsSL -o /work/plugins/LuckPerms-Velocity-5.5.17.jar "https://cdn.modrinth.com/data/Vebnzrzj/versions/GZjsuCmU/LuckPerms-Velocity-5.5.17.jar"
           curl -fsSL -o /work/plugins/Tribufu-VelocityRcon-1.2.0.jar "https://mvn.tribufu.com/releases/com/tribufu/Tribufu-VelocityRcon/1.2.0/Tribufu-VelocityRcon-1.2.0.jar"
           cat > /work/plugins/luckperms/config.yml <<LPCONF
@@ -459,11 +466,19 @@ spec:
           rcon-password = "noobstersmc-rcon-password-2026"
           rcon-colored = false
           RCONF
+          cp /config-template/velocity.toml /work-config/velocity.toml
+          sed -i "s/__POD_NAME__/${POD_NAME}/g" /work-config/velocity.toml
         volumeMounts:
         - name: velocity-plugin-bootstrap
           mountPath: /work/plugins
         - name: proxytransfer-patched
           mountPath: /patched
+        - name: proxyops-plugin
+          mountPath: /ops
+        - name: velocity-config-template
+          mountPath: /config-template
+        - name: velocity-config-generated
+          mountPath: /work-config
       containers:
       - name: velocity
         image: itzg/mc-proxy:latest
@@ -478,10 +493,22 @@ spec:
           value: "noobstersmc-rcon-password-2026"
         - name: TRANSFER_TARGET
           value: "192.168.4.33:25577"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: PROXY_DEPLOYMENT
+          value: "velocity-3"
+        - name: PROXY_PORT
+          value: "25577"
         volumeMounts:
         - name: velocity-plugin-bootstrap
           mountPath: /plugins
-        - name: velocity-config
+        - name: velocity-config-generated
           mountPath: /config/velocity.toml
           subPath: velocity.toml
         - name: forwarding-secret
@@ -523,9 +550,14 @@ spec:
       - name: proxytransfer-patched
         configMap:
           name: proxytransfer-patched
-      - name: velocity-config
+      - name: proxyops-plugin
+        configMap:
+          name: proxyops-plugin
+      - name: velocity-config-template
         configMap:
           name: velocity-config-3
+      - name: velocity-config-generated
+        emptyDir: {}
       - name: forwarding-secret
         secret:
           secretName: velocity-forwarding-secret
@@ -623,6 +655,39 @@ spec:
   selector:
     matchLabels:
       app: velocity-lb
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: velocity-proxy-sa
+  namespace: minecraft
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: velocity-proxy-ops
+  namespace: minecraft
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: velocity-proxy-ops
+  namespace: minecraft
+subjects:
+- kind: ServiceAccount
+  name: velocity-proxy-sa
+  namespace: minecraft
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: velocity-proxy-ops
 ---
 apiVersion: v1
 kind: Service

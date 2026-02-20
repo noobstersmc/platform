@@ -1,0 +1,5 @@
+velocity-plugin.json
+mc/noobsters/proxyops/ProxyOpsPlugin.class
+mc/noobsters/proxyops/KubernetesClient$PodRef.class
+mc/noobsters/proxyops/ProxyOpsPlugin$ProxyOpsCommand.class
+mc/noobsters/proxyops/KubernetesClient.class
