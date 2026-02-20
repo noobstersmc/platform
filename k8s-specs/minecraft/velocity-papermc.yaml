@@ -167,7 +167,7 @@ metadata:
   name: velocity-1
   namespace: minecraft
 spec:
-  replicas: 1
+  replicas: 0
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -290,7 +290,7 @@ metadata:
   name: velocity-2
   namespace: minecraft
 spec:
-  replicas: 1
+  replicas: 0
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -413,7 +413,7 @@ metadata:
   name: velocity-3
   namespace: minecraft
 spec:
-  replicas: 1
+  replicas: 3
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -554,8 +554,6 @@ data:
 
     backend velocity_backends
       balance roundrobin
-      server proxy1 velocity-proxy-1.minecraft.svc.cluster.local:25577 check send-proxy
-      server proxy2 velocity-proxy-2.minecraft.svc.cluster.local:25577 check send-proxy
       server proxy3 velocity-proxy-3.minecraft.svc.cluster.local:25577 check send-proxy
 ---
 apiVersion: apps/v1

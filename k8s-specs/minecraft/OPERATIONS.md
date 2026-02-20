@@ -5,6 +5,7 @@ For end-to-end operational steps, see `minecraft/RUNBOOK.md`.
 ## Entry points
 - Load-balanced proxy service: `svc/velocity-proxy`
 - Proxy-specific services: `svc/velocity-proxy-1`, `svc/velocity-proxy-2`, `svc/velocity-proxy-3` (internal-only `ClusterIP`)
+- Active proxy deployment: `velocity-3` with 3 replicas (`velocity-1/2` kept scaled to 0).
 
 ## Local/LAN access
 ```bash
