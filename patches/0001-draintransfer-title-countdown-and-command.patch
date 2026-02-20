@@ -1,0 +1,235 @@
+diff --git a/src/main/java/com/protoxon/proxyTransfer/TransferCommand.java b/src/main/java/com/protoxon/proxyTransfer/TransferCommand.java
+index 2ce8dea..3a39c5f 100644
+--- a/src/main/java/com/protoxon/proxyTransfer/TransferCommand.java
++++ b/src/main/java/com/protoxon/proxyTransfer/TransferCommand.java
+@@ -10,15 +10,13 @@ import com.velocitypowered.api.command.CommandMeta;
+ import com.velocitypowered.api.command.CommandSource;
+ import com.velocitypowered.api.proxy.Player;
+ import net.kyori.adventure.text.Component;
+-import net.kyori.adventure.text.TextComponent;
+ import net.kyori.adventure.text.format.NamedTextColor;
+-import net.kyori.adventure.text.format.TextColor;
++import net.kyori.adventure.title.Title;
+ 
+-import java.net.InetAddress;
+-import java.net.UnknownHostException;
++import java.time.Duration;
++import java.util.ArrayList;
+ import java.util.Collection;
+ import java.util.Collections;
+-import java.util.List;
+ import java.util.Optional;
+ 
+ import static com.protoxon.proxyTransfer.ProxyTransfer.logger;
+@@ -27,24 +25,25 @@ import static com.protoxon.proxyTransfer.ProxyTransfer.proxy;
+ public class TransferCommand {
+     public static void register() {
+         CommandManager commandManager = proxy.getCommandManager();
+-        // Create the root command
+         LiteralArgumentBuilder<CommandSource> root = LiteralArgumentBuilder.literal("transfer");
+ 
+-        root.executes(TransferCommand::handleRootCommand); // Handle the execution of /sls when no arguments are given
++        root.executes(TransferCommand::handleRootCommand);
+ 
+-        // Register subcommands
+-        root.then(transfer()); // TRANSFER
+-
+-        // Create the Brigadier command
++        root.then(transfer());
+         BrigadierCommand brigadierCommand = new BrigadierCommand(root);
+-
+-        // Create command metadata
+         CommandMeta commandMeta = commandManager.metaBuilder("transfer")
+                 .plugin(ProxyTransfer.plugin)
+                 .build();
+-
+-        // Register the command
+         commandManager.register(commandMeta, brigadierCommand);
++
++        LiteralArgumentBuilder<CommandSource> drainRoot = LiteralArgumentBuilder.literal("draintransfer");
++        drainRoot.executes(TransferCommand::handleDrainRootCommand);
++        drainRoot.then(drainTransfer());
++        BrigadierCommand drainCommand = new BrigadierCommand(drainRoot);
++        CommandMeta drainMeta = commandManager.metaBuilder("draintransfer")
++                .plugin(ProxyTransfer.plugin)
++                .build();
++        commandManager.register(drainMeta, drainCommand);
+     }
+ 
+     private static int handleRootCommand(CommandContext<CommandSource> context) {
+@@ -58,6 +57,12 @@ public class TransferCommand {
+         return 0;
+     }
+ 
++    private static int handleDrainRootCommand(CommandContext<CommandSource> context) {
++        CommandSource source = context.getSource();
++        source.sendMessage(Component.text("Usage: /draintransfer <host:port> <all|local|player> [seconds]"));
++        return 0;
++    }
++
+     public static RequiredArgumentBuilder<CommandSource, String> transfer() {
+         return RequiredArgumentBuilder.<CommandSource, String>argument("target", StringArgumentType.greedyString())
+                 .suggests((context, builder) -> {
+@@ -73,11 +78,6 @@ public class TransferCommand {
+                 .executes(context -> {
+                     CommandSource source = context.getSource();
+ 
+-                    if (!(source instanceof Player executor)) {
+-                        source.sendMessage(Component.text("This command can only be run by a player.", NamedTextColor.RED));
+-                        return 0;
+-                    }
+-
+                     String input = StringArgumentType.getString(context, "target").trim();
+                     String[] parts = input.split("\\s+"); // Split by space(s)
+ 
+@@ -89,17 +89,24 @@ public class TransferCommand {
+                     String hostPort = parts[0];
+                     String[] hostParts = hostPort.split(":", 2);
+                     String host = hostParts[0];
+-                    int port = (hostParts.length > 1) ? getPort(hostParts[1]) : 25565;
+-
+-                    if (port == -1) {
+-                        source.sendMessage(Component.text("Error: Invalid port.", NamedTextColor.RED));
+-                        return 0;
++                    int port = 25565;
++                    if (hostParts.length > 1) {
++                        try {
++                            port = Integer.parseInt(hostParts[1]);
++                        } catch (NumberFormatException e) {
++                            source.sendMessage(Component.text("Error: Invalid port.", NamedTextColor.RED));
++                            return 0;
++                        }
+                     }
+ 
+                     // Handle optional second argument
+                     String playerContext = (parts.length > 1) ? parts[1] : null;
+ 
+                     if (playerContext == null) {
++                        if (!(source instanceof Player executor)) {
++                            source.sendMessage(Component.text("Console usage: /transfer <host:port> all | <player>", NamedTextColor.RED));
++                            return 0;
++                        }
+                         Transfer.transferPlayer(executor, host, port);
+                         return 1;
+                     }
+@@ -134,16 +141,105 @@ public class TransferCommand {
+                 });
+     }
+ 
+-    public static int getPort(String context) {
+-        String[] parts = context.split(":", 2); // limit to 2 parts
+-        if (parts.length < 2) return 25565; // no port specified
+-        try {
+-            return Integer.parseInt(parts[1]);
+-        } catch (NumberFormatException e) {
+-            return -1; // invalid port
+-        }
++    public static RequiredArgumentBuilder<CommandSource, String> drainTransfer() {
++        return RequiredArgumentBuilder.<CommandSource, String>argument("target", StringArgumentType.greedyString())
++                .suggests((context, builder) -> {
++                    String input = builder.getRemaining().toLowerCase();
++                    if (input.contains(" ")) {
++                        builder.suggest("all 3");
++                        builder.suggest("local 3");
++                        proxy.getAllPlayers().forEach(player -> builder.suggest(player.getUsername() + " 3"));
++                    }
++                    return builder.buildFuture();
++                })
++                .executes(context -> {
++                    CommandSource source = context.getSource();
++                    String input = StringArgumentType.getString(context, "target").trim();
++                    String[] parts = input.split("\\s+");
++                    if (parts.length < 2) {
++                        source.sendMessage(Component.text("Usage: /draintransfer <host:port> <all|local|player> [seconds]", NamedTextColor.RED));
++                        return 0;
++                    }
++
++                    String hostPort = parts[0];
++                    String[] hostParts = hostPort.split(":", 2);
++                    String host = hostParts[0];
++                    int port = 25565;
++                    if (hostParts.length > 1) {
++                        try {
++                            port = Integer.parseInt(hostParts[1]);
++                        } catch (NumberFormatException e) {
++                            source.sendMessage(Component.text("Error: Invalid port.", NamedTextColor.RED));
++                            return 0;
++                        }
++                    }
++
++                    String playerContext = parts[1];
++                    int countdownSeconds = 3;
++                    if (parts.length > 2) {
++                        try {
++                            countdownSeconds = Math.max(1, Integer.parseInt(parts[2]));
++                        } catch (NumberFormatException e) {
++                            source.sendMessage(Component.text("Error: Invalid countdown seconds.", NamedTextColor.RED));
++                            return 0;
++                        }
++                    }
++
++                    if (!source.hasPermission("proxytransfer.others")) {
++                        source.sendMessage(Component.text("You don't have permission to transfer others. You must have the \"proxytransfer.others\" permission.", NamedTextColor.RED));
++                        return 0;
++                    }
++
++                    Collection<Player> targets;
++                    switch (playerContext.toLowerCase()) {
++                        case "all":
++                            targets = new ArrayList<>(proxy.getAllPlayers());
++                            break;
++                        case "local":
++                            targets = new ArrayList<>(getPlayersOnSameServer(source));
++                            break;
++                        default:
++                            Player target = getPlayer(playerContext);
++                            if (target == null) {
++                                source.sendMessage(Component.text("Player " + playerContext + " not found.", NamedTextColor.RED));
++                                return 0;
++                            }
++                            targets = Collections.singletonList(target);
++                            break;
++                    }
++
++                    if (targets.isEmpty()) {
++                        source.sendMessage(Component.text("No players to transfer.", NamedTextColor.YELLOW));
++                        return 1;
++                    }
++
++                    scheduleDrainTransfer(targets, host, port, countdownSeconds);
++                    source.sendMessage(Component.text("Starting drain transfer for " + targets.size() + " player(s).", NamedTextColor.GREEN));
++                    return 1;
++                });
+     }
+ 
++    private static void scheduleDrainTransfer(Collection<Player> players, String host, int port, int countdownSeconds) {
++        for (int remaining = countdownSeconds; remaining >= 1; remaining--) {
++            int delaySeconds = countdownSeconds - remaining;
++            int snapshotRemaining = remaining;
++            proxy.getScheduler().buildTask(ProxyTransfer.plugin, () -> {
++                for (Player player : players) {
++                    player.showTitle(Title.title(
++                            Component.text("Proxy update", NamedTextColor.GOLD),
++                            Component.text("Transferring you in " + snapshotRemaining + "...", NamedTextColor.YELLOW),
++                            Title.Times.times(Duration.ZERO, Duration.ofSeconds(1), Duration.ofMillis(250))
++                    ));
++                }
++            }).delay(Duration.ofSeconds(delaySeconds)).schedule();
++        }
++
++        proxy.getScheduler().buildTask(ProxyTransfer.plugin, () -> {
++            for (Player player : players) {
++                Transfer.transferPlayer(player, host, port);
++            }
++        }).delay(Duration.ofSeconds(countdownSeconds)).schedule();
++    }
+     public static Player getPlayer(String username) {
+         Optional<Player> player = proxy.getPlayer(username);
+         return player.orElse(null);
+@@ -158,4 +254,4 @@ public class TransferCommand {
+                 .map(serverConnection -> serverConnection.getServer().getPlayersConnected())
+                 .orElse(Collections.emptyList());
+     }
+-}
+\ No newline at end of file
++}
