@@ -8,7 +8,9 @@ import org.slf4j.Logger;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManagerFactory;
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -229,6 +231,87 @@ public class KubernetesClient {
             return false;
         } catch (Exception e) {
             logger.error("Failed to restart workload", e);
+            return false;
+        }
+    }
+
+    public boolean scaleWorkload(String namespace, String workloadName, String workloadKind, int replicas) {
+        if (bearer.isBlank()) {
+            return false;
+        }
+        try {
+            String resource = "deployments";
+            if ("statefulset".equalsIgnoreCase(workloadKind) || "statefulsets".equalsIgnoreCase(workloadKind)) {
+                resource = "statefulsets";
+            }
+            String path = "/apis/apps/v1/namespaces/" + namespace + "/" + resource + "/" + workloadName;
+            String body = "{\"spec\":{\"replicas\":" + replicas + "}}";
+            HttpRequest req = HttpRequest.newBuilder(URI.create("https://kubernetes.default.svc" + path))
+                    .timeout(Duration.ofSeconds(5))
+                    .header("Authorization", "Bearer " + bearer)
+                    .header("Content-Type", "application/strategic-merge-patch+json")
+                    .method("PATCH", HttpRequest.BodyPublishers.ofString(body))
+                    .build();
+            HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
+            if (res.statusCode() >= 200 && res.statusCode() < 300) {
+                return true;
+            }
+            logger.error("Workload scale PATCH failed: {} {}", res.statusCode(), res.body());
+            return false;
+        } catch (Exception e) {
+            logger.error("Failed to scale workload", e);
+            return false;
+        }
+    }
+
+    public boolean watchDiscoverableEndpointEvents(
+            String namespace,
+            String labelKey,
+            String labelValue,
+            Runnable onEvent
+    ) {
+        if (bearer.isBlank()) {
+            return false;
+        }
+        try {
+            String selector = URLEncoder.encode(labelKey + "=" + labelValue, StandardCharsets.UTF_8);
+            String path = "/api/v1/namespaces/" + namespace
+                    + "/endpoints?labelSelector=" + selector
+                    + "&watch=true&allowWatchBookmarks=true&timeoutSeconds=300";
+
+            HttpRequest req = HttpRequest.newBuilder(URI.create("https://kubernetes.default.svc" + path))
+                    .timeout(Duration.ofSeconds(310))
+                    .header("Authorization", "Bearer " + bearer)
+                    .GET()
+                    .build();
+            HttpResponse<java.io.InputStream> res = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
+            if (res.statusCode() < 200 || res.statusCode() >= 300) {
+                String body = "";
+                try {
+                    body = new String(res.body().readAllBytes(), StandardCharsets.UTF_8);
+                } catch (Exception ignored) {
+                }
+                logger.error("Kubernetes endpoint watch failed: {} {}", res.statusCode(), body);
+                return false;
+            }
+
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(res.body(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.isBlank()) {
+                        continue;
+                    }
+                    JsonObject obj = JsonParser.parseString(line).getAsJsonObject();
+                    String type = obj.has("type") ? obj.get("type").getAsString() : "";
+                    if ("BOOKMARK".equalsIgnoreCase(type)) {
+                        continue;
+                    }
+                    onEvent.run();
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            logger.warn("Discoverable endpoint watch loop ended: {}", e.toString());
             return false;
         }
     }

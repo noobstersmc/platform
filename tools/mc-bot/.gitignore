@@ -1,3 +1,4 @@
 .env
 .profiles/
 node_modules/
+.bot-state.json

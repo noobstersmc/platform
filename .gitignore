@@ -8,3 +8,4 @@ target/
 tools/mc-bot/node_modules/
 tools/mc-bot/.profiles/
 tools/mc-bot/.env
+tools/mc-bot/.bot-state.json

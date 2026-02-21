@@ -22,7 +22,14 @@ usage() {
   cat <<'TXT'
 Usage:
   ./mc-botctl.sh status
+  ./mc-botctl.sh goal [new goal text]
+  ./mc-botctl.sh autonomy
+  ./mc-botctl.sh autonomy-start
+  ./mc-botctl.sh autonomy-stop
+  ./mc-botctl.sh memory [limit]
   ./mc-botctl.sh send <command>
+  ./mc-botctl.sh action <name> [payload_json]
+  ./mc-botctl.sh observe
   ./mc-botctl.sh reconnect
   ./mc-botctl.sh quit
 TXT
@@ -54,6 +61,28 @@ case "${cmd}" in
   status)
     request GET /status
     ;;
+  goal)
+    shift
+    if [[ $# -eq 0 ]]; then
+      request GET /goal
+    else
+      escaped_goal="${*//\"/\\\"}"
+      request POST /goal "{\"goal\":\"${escaped_goal}\"}"
+    fi
+    ;;
+  autonomy)
+    request GET /autonomy
+    ;;
+  autonomy-start)
+    request POST /autonomy/start
+    ;;
+  autonomy-stop)
+    request POST /autonomy/stop
+    ;;
+  memory)
+    limit="${2:-50}"
+    request GET "/memory?limit=${limit}"
+    ;;
   send)
     shift
     if [[ $# -eq 0 ]]; then
@@ -62,6 +91,23 @@ case "${cmd}" in
       exit 1
     fi
     request POST /command "$*"
+    ;;
+  action)
+    action_name="${2:-}"
+    if [[ -z "${action_name}" ]]; then
+      echo "Missing action name" >&2
+      usage >&2
+      exit 1
+    fi
+    if [[ $# -ge 3 ]]; then
+      payload="${3}"
+      request POST /action "{\"action\":\"${action_name}\",\"payload\":${payload}}"
+    else
+      request POST /action "{\"action\":\"${action_name}\"}"
+    fi
+    ;;
+  observe)
+    request POST /action '{"action":"observe"}'
     ;;
   reconnect)
     request POST /reconnect

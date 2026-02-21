@@ -15,7 +15,11 @@
   "author": "noobstersmc",
   "license": "ISC",
   "dependencies": {
+    "canvas": "^3.2.1",
     "dotenv": "^17.3.1",
-    "mineflayer": "^4.35.0"
+    "mineflayer": "^4.35.0",
+    "mineflayer-pathfinder": "^2.4.5",
+    "prismarine-viewer": "^1.33.0",
+    "vec3": "^0.1.10"
   }
 }

@@ -590,6 +590,8 @@ spec:
           value: "proxyops-runtime"
         - name: PROXY_DISCOVERY_INTERVAL_SECONDS
           value: "5"
+        - name: PROXY_DISCOVERY_WATCH_ENABLED
+          value: "true"
         volumeMounts:
         - name: velocity-plugin-bootstrap
           mountPath: /plugins
@@ -793,7 +795,7 @@ metadata:
 rules:
 - apiGroups: [""]
   resources: ["pods", "services", "endpoints"]
-  verbs: ["get", "list"]
+  verbs: ["get", "list", "watch"]
 - apiGroups: [""]
   resources: ["configmaps"]
   verbs: ["get", "patch"]

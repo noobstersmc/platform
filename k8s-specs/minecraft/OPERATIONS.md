@@ -29,11 +29,14 @@ For end-to-end operational steps, see `minecraft/RUNBOOK.md`.
   - `/proxyops servers`
   - `/proxyops go <pod-name>`
   - `/proxyops default [name]`
+  - `/proxyops scale <lobby|survival|creative> <replicas>` (runtime-only scale test)
   - `/proxyops update`
 - Aliases: `/proxy`, `/pops`
 - Dynamic backend discovery:
   - Services labeled `mc.noobsters.net/velocity-discovery=enabled`
   - Names are short pod-aware names (for example `lobby-0-3ed187`)
+  - Registration updates are event-driven via Kubernetes endpoint watch
+  - Periodic sync still runs as fallback (`PROXY_DISCOVERY_INTERVAL_SECONDS`)
 
 ## Redis sync for proxy presence/counts
 - Redis service: `svc/redis` (`deployment/redis`)

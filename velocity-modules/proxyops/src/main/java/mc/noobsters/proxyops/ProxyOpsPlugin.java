@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -49,8 +50,10 @@ public class ProxyOpsPlugin {
     private final String discoveryLabelValue;
     private final String discoveryNamePrefix;
     private final long discoveryIntervalSeconds;
+    private final boolean discoveryWatchEnabled;
     private final String runtimeConfigMap;
     private final Set<String> managedDiscoveredServers = new HashSet<>();
+    private final AtomicLong nextWatchSyncAtMillis = new AtomicLong(0);
     private volatile String defaultServerKey = "limbo";
     private KubernetesClient k8s;
 
@@ -73,6 +76,7 @@ public class ProxyOpsPlugin {
         this.discoveryLabelValue = envOr("PROXY_DISCOVERY_LABEL_VALUE", "enabled");
         this.discoveryNamePrefix = envOrAllowBlank("PROXY_DISCOVERY_NAME_PREFIX", "auto-");
         this.discoveryIntervalSeconds = Long.parseLong(envOr("PROXY_DISCOVERY_INTERVAL_SECONDS", "5"));
+        this.discoveryWatchEnabled = Boolean.parseBoolean(envOr("PROXY_DISCOVERY_WATCH_ENABLED", "true"));
         this.runtimeConfigMap = envOr("PROXY_RUNTIME_CONFIGMAP", "proxyops-runtime");
     }
 
@@ -91,6 +95,9 @@ public class ProxyOpsPlugin {
                 .schedule();
         if (discoveryEnabled) {
             logger.info("ProxyOps discovery enabled: label {}={}", discoveryLabelKey, discoveryLabelValue);
+            if (discoveryWatchEnabled) {
+                startDiscoveryWatchLoop();
+            }
         }
     }
 
@@ -146,6 +153,43 @@ public class ProxyOpsPlugin {
         }
     }
 
+    private void startDiscoveryWatchLoop() {
+        Thread t = new Thread(() -> {
+            logger.info("ProxyOps endpoint watch enabled for discovery");
+            while (true) {
+                boolean ok = k8s.watchDiscoverableEndpointEvents(
+                        namespace,
+                        discoveryLabelKey,
+                        discoveryLabelValue,
+                        this::triggerWatchSync
+                );
+                if (!ok) {
+                    try {
+                        Thread.sleep(2000);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+        }, "proxyops-endpoint-watch");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void triggerWatchSync() {
+        long now = System.currentTimeMillis();
+        long gate = nextWatchSyncAtMillis.get();
+        if (now < gate) {
+            return;
+        }
+        long next = now + 1000;
+        if (!nextWatchSyncAtMillis.compareAndSet(gate, next)) {
+            return;
+        }
+        syncDiscoveredServers();
+    }
+
     private void refreshDefaultServerKey() {
         String value = k8s.getConfigMapKey(namespace, runtimeConfigMap, "defaultServer");
         if (value != null && !value.isBlank()) {
@@ -194,6 +238,7 @@ public class ProxyOpsPlugin {
                 case "update" -> update(invocation);
                 case "servers" -> servers(invocation);
                 case "default" -> setDefault(invocation);
+                case "scale" -> scale(invocation);
                 default -> usage(invocation);
             }
         }
@@ -204,7 +249,7 @@ public class ProxyOpsPlugin {
         }
 
         private void usage(Invocation inv) {
-            inv.source().sendMessage(Component.text("/proxyops where | list | servers | default [name] | go <pod-name> | update", NamedTextColor.YELLOW));
+            inv.source().sendMessage(Component.text("/proxyops where | list | servers | default [name] | scale <lobby|survival|creative> <replicas> | go <pod-name> | update", NamedTextColor.YELLOW));
         }
 
         private void where(Invocation inv) {
@@ -338,14 +383,71 @@ public class ProxyOpsPlugin {
                     NamedTextColor.GREEN));
         }
 
+        private void scale(Invocation inv) {
+            if (inv.source().getPermissionValue("proxyops.update") == Tristate.FALSE) {
+                inv.source().sendMessage(Component.text("Missing permission: proxyops.update", NamedTextColor.RED));
+                return;
+            }
+            String[] args = inv.arguments();
+            if (args.length < 3) {
+                inv.source().sendMessage(Component.text(
+                        "Usage: /proxyops scale <lobby|survival|creative> <replicas>",
+                        NamedTextColor.YELLOW));
+                return;
+            }
+            String target = args[1].toLowerCase();
+            int replicas;
+            try {
+                replicas = Integer.parseInt(args[2]);
+            } catch (NumberFormatException e) {
+                inv.source().sendMessage(Component.text("Replicas must be an integer.", NamedTextColor.RED));
+                return;
+            }
+            if (replicas < 0 || replicas > 10) {
+                inv.source().sendMessage(Component.text("Replicas must be between 0 and 10.", NamedTextColor.RED));
+                return;
+            }
+
+            String workload;
+            String kind;
+            switch (target) {
+                case "lobby" -> {
+                    workload = "paper-lobby";
+                    kind = "statefulset";
+                }
+                case "survival" -> {
+                    workload = "paper-survival";
+                    kind = "deployment";
+                }
+                case "creative" -> {
+                    workload = "paper-creative";
+                    kind = "deployment";
+                }
+                default -> {
+                    inv.source().sendMessage(Component.text("Target must be lobby, survival, or creative.", NamedTextColor.RED));
+                    return;
+                }
+            }
+
+            boolean ok = k8s.scaleWorkload(namespace, workload, kind, replicas);
+            if (!ok) {
+                inv.source().sendMessage(Component.text("Scale request failed. Check plugin logs.", NamedTextColor.RED));
+                return;
+            }
+            inv.source().sendMessage(Component.text(
+                    "Scaled " + kind + "/" + workload + " to " + replicas
+                            + " (runtime only; declarative specs unchanged).",
+                    NamedTextColor.GREEN));
+        }
+
         @Override
         public List<String> suggest(Invocation invocation) {
             String[] args = invocation.arguments();
             if (args.length == 0) {
-                return List.of("where", "list", "servers", "default", "go", "update");
+                return List.of("where", "list", "servers", "default", "scale", "go", "update");
             }
             if (args.length == 1) {
-                return List.of("where", "list", "servers", "default", "go", "update").stream()
+                return List.of("where", "list", "servers", "default", "scale", "go", "update").stream()
                         .filter(s -> s.startsWith(args[0].toLowerCase()))
                         .toList();
             }
@@ -366,6 +468,11 @@ public class ProxyOpsPlugin {
                     }
                 }
                 return out;
+            }
+            if (args.length == 2 && "scale".equalsIgnoreCase(args[0])) {
+                return List.of("lobby", "survival", "creative").stream()
+                        .filter(s -> s.startsWith(args[1].toLowerCase()))
+                        .toList();
             }
             return List.of();
         }

@@ -1,6 +1,12 @@
 # mc-bot
 
-A minimal Mineflayer test client for validating Velocity `/server` behavior as a real player.
+A Mineflayer-based controllable bot for Velocity/Minecraft automation, with:
+
+- reconnectable container runtime
+- local HTTP control API
+- first-person web viewer (`prismarine-viewer`)
+- structured action endpoints (move/look/dig/place/craft/interact/inventory)
+- short-term memory feed for agent loops
 
 ## Important
 
@@ -36,8 +42,13 @@ In another terminal, control the running bot:
 
 ```bash
 npm run ctl -- status
+npm run ctl -- goal
+npm run ctl -- goal "Gather wood and build a safe shelter"
 npm run ctl -- send "/server"
 npm run ctl -- reconnect
+npm run ctl -- autonomy
+npm run ctl -- autonomy-start
+npm run ctl -- autonomy-stop
 npm run ctl -- quit
 ```
 
@@ -47,37 +58,139 @@ npm run ctl -- quit
 npm run start
 ```
 
-## Usage
+## Browser Viewer
 
-After login/spawn, use stdin commands:
+The bot now exposes a live first-person browser view (when enabled):
 
-- `/server`
-- `/server lobby-0-xxxxxx`
-- `/server creative-xxxxxx-xxxxxx`
-- `:where` (runs `/proxyops where`)
-- `:servers` (runs `/server`)
-- `:reconnect`
-- `:quit`
+- default URL: `http://127.0.0.1:30078`
+- config: `MC_VIEWER_*` in `.env`
 
-For Microsoft auth, first run may show a device auth code; complete that flow to create cached tokens in `.profiles`.
+This is the best practical way to let an external controller “see” what the bot sees.
 
 ## Control API
 
-Enabled by default for local automation:
+Enabled by default on `http://127.0.0.1:30077`:
 
 - `GET /status`
-- `POST /command` (plain text body or `{"command":"..."}`)
+- `GET /memory?limit=50`
+- `POST /command` (raw command text or `{"command":"..."}`)
+- `POST /action`
 - `POST /reconnect`
 - `POST /quit`
+- `GET /autonomy`
+- `POST /autonomy/start`
+- `POST /autonomy/stop`
+- `GET /goal`
+- `POST /goal`
 
-Config in `.env`:
+`/action` supports:
 
-- `MC_CONTROL_ENABLED=true`
-- `MC_CONTROL_HOST=127.0.0.1`
-- `MC_CONTROL_PORT=30077`
-- `MC_CONTROL_TOKEN=` (optional bearer token)
+- `chat`
+- `move`
+- `stop`
+- `look`
+- `dig` / `break`
+- `place`
+- `equip`
+- `interact`
+- `useItem`
+- `craft`
+- `inventory`
+- `observe`
 
-Reconnect behavior is configurable with:
+## CLI Control
 
-- `MC_AUTO_RECONNECT=true`
-- `MC_RECONNECT_DELAY_MS=5000`
+Use the helper script via npm:
+
+```bash
+npm run ctl -- status
+npm run ctl -- goal
+npm run ctl -- autonomy
+npm run ctl -- observe
+npm run ctl -- memory 30
+npm run ctl -- send "/server"
+npm run ctl -- action move '{"x":10,"y":64,"z":10,"range":1}'
+npm run ctl -- action look '{"target":{"x":11,"y":65,"z":10}}'
+npm run ctl -- action dig '{"x":11,"y":64,"z":10}'
+npm run ctl -- action craft '{"itemName":"oak_planks","count":1}'
+```
+
+## Autonomous Mode (OpenRouter)
+
+Set in `.env`:
+
+- `MC_AUTONOMOUS_ENABLED=true`
+- `OPENROUTER_API_KEY=...`
+- `OPENROUTER_MODEL=openai/gpt-4.1-mini`
+
+Optional tuning:
+
+- `MC_AUTONOMOUS_TICK_MS`
+- `MC_AUTONOMOUS_GOAL`
+- `MC_AUTONOMOUS_ALLOWED_ACTIONS`
+- `MC_AUTONOMOUS_VERBOSE_LOGS`
+- `MC_AUTONOMOUS_ALLOW_DESTRUCTIVE` (default `false`)
+- `MC_AUTONOMOUS_CHAT_COOLDOWN_MS`
+- `MC_AUTONOMOUS_SELF_REPORT_MS` (periodic "thinking out loud" status in chat)
+- `MC_AUTONOMOUS_REFLECTION_ENABLED`
+- `MC_AUTONOMOUS_REFLECTION_INTERVAL_MS` (set `10000` for every 10s)
+- `MC_AUTONOMOUS_REFLECTION_MAX_TOKENS`
+- `OPENROUTER_TEMPERATURE`
+- `OPENROUTER_MAX_TOKENS`
+
+When enabled, the bot starts the inference loop automatically after spawn and repeatedly:
+
+1. Reads current observation + recent memory.
+2. Calls OpenRouter for a JSON action decision.
+3. Executes one action.
+4. Stores decision/result back into memory.
+
+Reflection loop:
+
+- Every `MC_AUTONOMOUS_REFLECTION_INTERVAL_MS`, the bot runs a second inference pass to:
+- Explain what it is thinking in chat.
+- Re-evaluate and update its goal.
+- Decide the next immediate step.
+
+## In-Game Chat Control
+
+You can control the bot directly from Minecraft chat:
+
+- `!help`
+- `!goal gather wood, then build a small shelter`
+- `!status`
+- `!autonomy on`
+- `!autonomy off`
+- `!explore on`
+- `!explore off`
+- `!listen`
+
+Natural language directives (no prefix) from allowed users are also accepted and queued as high-priority instructions.
+The bot will acknowledge with `[ack] ...` in chat when it heard you.
+
+Config:
+
+- `MC_CHAT_CONTROL_ENABLED=true`
+- `MC_CHAT_CONTROL_PREFIX=!`
+- `MC_CHAT_CONTROL_ADMINS=` (comma-separated usernames, optional)
+- `MC_CHAT_DIRECTIVE_ENABLED=true`
+- `MC_CHAT_DIRECTIVE_TTL_MS=60000`
+
+State restore:
+
+- `MC_STATE_RESTORE_GOAL=false` keeps your env default goal on restart.
+
+Exploration behavior:
+
+- `MC_AUTONOMOUS_CONTINUOUS_MOVE_ENABLED=false` by default to reduce random wandering.
+
+## Agent Loop Direction
+
+For an LLM “brain”, the intended loop is:
+
+1. Read `GET /status` and `GET /memory`.
+2. Decide next step.
+3. Execute one `POST /action`.
+4. Repeat with a safety policy (rate limits, allow-list of actions, stop conditions).
+
+For Microsoft auth, first run may show a device auth code; complete that flow to create cached tokens in `.profiles`.
