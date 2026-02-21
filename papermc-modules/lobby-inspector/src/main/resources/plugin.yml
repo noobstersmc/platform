@@ -1,0 +1,9 @@
+name: LobbyInspector
+version: 1.0.0
+main: mc.noobsters.lobbyinspector.LobbyInspectorPlugin
+api-version: '1.21'
+authors: [noobstersmc]
+permissions:
+  lobbyinspector.use:
+    description: Allow spectator right-click inspection
+    default: op

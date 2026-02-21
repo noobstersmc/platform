@@ -131,6 +131,7 @@ Optional tuning:
 - `MC_AUTONOMOUS_VERBOSE_LOGS`
 - `MC_AUTONOMOUS_ALLOW_DESTRUCTIVE` (default `false`)
 - `MC_AUTONOMOUS_CHAT_COOLDOWN_MS`
+- `MC_AUTONOMOUS_AVOID_HOLES` (default `true`, avoids digging floor/support near bot feet)
 - `MC_AUTONOMOUS_SELF_REPORT_MS` (periodic "thinking out loud" status in chat)
 - `MC_AUTONOMOUS_REFLECTION_ENABLED`
 - `MC_AUTONOMOUS_REFLECTION_INTERVAL_MS` (set `10000` for every 10s)
@@ -194,3 +195,8 @@ For an LLM “brain”, the intended loop is:
 4. Repeat with a safety policy (rate limits, allow-list of actions, stop conditions).
 
 For Microsoft auth, first run may show a device auth code; complete that flow to create cached tokens in `.profiles`.
+
+## Velocity auto-join behavior
+
+- `MC_TARGET_SERVER_PREFIX` controls auto-selected backend prefix from `/server` output (default `survival-`).
+- `MC_AUTO_JOIN_COMMAND_TEMPLATE` controls join command format (default `/server {server}`).

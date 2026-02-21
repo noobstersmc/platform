@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -51,9 +52,12 @@ public class ProxyOpsPlugin {
     private final String discoveryNamePrefix;
     private final long discoveryIntervalSeconds;
     private final boolean discoveryWatchEnabled;
+    private final String scaleNotifyPermission;
     private final String runtimeConfigMap;
     private final Set<String> managedDiscoveredServers = new HashSet<>();
     private final AtomicLong nextWatchSyncAtMillis = new AtomicLong(0);
+    private final Map<String, KubernetesClient.WorkloadStatus> lastWorkloadStatus = new ConcurrentHashMap<>();
+    private final Map<String, ScaleRequest> activeScaleRequests = new ConcurrentHashMap<>();
     private volatile String defaultServerKey = "limbo";
     private KubernetesClient k8s;
 
@@ -77,6 +81,7 @@ public class ProxyOpsPlugin {
         this.discoveryNamePrefix = envOrAllowBlank("PROXY_DISCOVERY_NAME_PREFIX", "auto-");
         this.discoveryIntervalSeconds = Long.parseLong(envOr("PROXY_DISCOVERY_INTERVAL_SECONDS", "5"));
         this.discoveryWatchEnabled = Boolean.parseBoolean(envOr("PROXY_DISCOVERY_WATCH_ENABLED", "true"));
+        this.scaleNotifyPermission = envOr("PROXY_SCALE_NOTIFY_PERMISSION", "proxyops.scale.notify");
         this.runtimeConfigMap = envOr("PROXY_RUNTIME_CONFIGMAP", "proxyops-runtime");
     }
 
@@ -103,6 +108,10 @@ public class ProxyOpsPlugin {
 
     @Subscribe
     public void onChooseInitialServer(PlayerChooseInitialServerEvent event) {
+        if (event.getInitialServer().isPresent()) {
+            // Respect initial server selected by other plugins (for example RedisBungee reconnect).
+            return;
+        }
         resolveDefaultServer().ifPresent(event::setInitialServer);
     }
 
@@ -111,6 +120,7 @@ public class ProxyOpsPlugin {
         if (discoveryEnabled) {
             syncDiscoveredServers();
         }
+        monitorScaleProgress();
     }
 
     private synchronized void syncDiscoveredServers() {
@@ -195,6 +205,83 @@ public class ProxyOpsPlugin {
         if (value != null && !value.isBlank()) {
             defaultServerKey = value.trim();
         }
+    }
+
+    private void monitorScaleProgress() {
+        for (WorkloadRef ref : scaleWorkloads()) {
+            KubernetesClient.WorkloadStatus status = k8s.getWorkloadStatus(namespace, ref.workload(), ref.kind());
+            if (status == null) {
+                continue;
+            }
+            String key = ref.key();
+            KubernetesClient.WorkloadStatus previous = lastWorkloadStatus.put(key, status);
+            if (previous != null && status.readyReplicas() > previous.readyReplicas()) {
+                int delta = status.readyReplicas() - previous.readyReplicas();
+                announceScaleEvent(ref.alias() + " scale progress: +" + delta + " ready (" +
+                        status.readyReplicas() + "/" + status.desiredReplicas() + ").",
+                        NamedTextColor.AQUA);
+            }
+
+            ScaleRequest request = activeScaleRequests.get(key);
+            if (request == null) {
+                continue;
+            }
+            if (status.desiredReplicas() == request.desiredReplicas()
+                    && status.readyReplicas() >= request.desiredReplicas()) {
+                announceScaleEvent(
+                        ref.alias() + " scale complete at " + status.readyReplicas() + "/" + status.desiredReplicas() + ".",
+                        NamedTextColor.GREEN);
+                activeScaleRequests.remove(key);
+            }
+        }
+    }
+
+    private void announceScaleEvent(String msg, NamedTextColor color) {
+        logger.info("[scale] {}", msg);
+        Component c = Component.text("[Scale] " + msg, color);
+        for (Player p : proxy.getAllPlayers()) {
+            if (p.getPermissionValue(scaleNotifyPermission) != Tristate.FALSE) {
+                p.sendMessage(c);
+            }
+        }
+    }
+
+    private List<WorkloadRef> scaleWorkloads() {
+        return List.of(
+                new WorkloadRef("lobby", "paper-lobby", "statefulset"),
+                new WorkloadRef("survival", "paper-survival", "deployment"),
+                new WorkloadRef("creative", "paper-creative", "deployment")
+        );
+    }
+
+    private WorkloadRef workloadFromAlias(String alias) {
+        for (WorkloadRef ref : scaleWorkloads()) {
+            if (ref.alias().equals(alias)) {
+                return ref;
+            }
+        }
+        return null;
+    }
+
+    private List<Integer> upcomingLobbyOrdinals(int desiredReplicas) {
+        Set<Integer> existing = new HashSet<>();
+        Pattern p = Pattern.compile("^lobby-(\\d+)-.*$");
+        for (String name : managedDiscoveredServers) {
+            Matcher m = p.matcher(name);
+            if (m.matches()) {
+                try {
+                    existing.add(Integer.parseInt(m.group(1)));
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        }
+        List<Integer> out = new ArrayList<>();
+        for (int i = 0; i < desiredReplicas; i++) {
+            if (!existing.contains(i)) {
+                out.add(i);
+            }
+        }
+        return out;
     }
 
     private Optional<RegisteredServer> resolveDefaultServer() {
@@ -343,11 +430,40 @@ public class ProxyOpsPlugin {
             List<String> names = managedDiscoveredServers.stream().sorted().toList();
             if (names.isEmpty()) {
                 inv.source().sendMessage(Component.text("No discovered backends currently registered.", NamedTextColor.YELLOW));
-                return;
+            } else {
+                inv.source().sendMessage(Component.text("Discovered backends:", NamedTextColor.AQUA));
+                for (String n : names) {
+                    inv.source().sendMessage(Component.text("- " + n, NamedTextColor.GRAY));
+                }
             }
-            inv.source().sendMessage(Component.text("Discovered backends:", NamedTextColor.AQUA));
-            for (String n : names) {
-                inv.source().sendMessage(Component.text("- " + n, NamedTextColor.GRAY));
+
+            inv.source().sendMessage(Component.text("Scale status:", NamedTextColor.AQUA));
+            for (WorkloadRef ref : scaleWorkloads()) {
+                KubernetesClient.WorkloadStatus status = k8s.getWorkloadStatus(namespace, ref.workload(), ref.kind());
+                if (status == null) {
+                    continue;
+                }
+                lastWorkloadStatus.put(ref.key(), status);
+                int pending = Math.max(0, status.desiredReplicas() - status.readyReplicas());
+                StringBuilder line = new StringBuilder("- ")
+                        .append(ref.alias())
+                        .append(": ")
+                        .append(status.readyReplicas())
+                        .append("/")
+                        .append(status.desiredReplicas());
+                ScaleRequest req = activeScaleRequests.get(ref.key());
+                if (req != null) {
+                    line.append(" target=").append(req.desiredReplicas());
+                }
+                if (pending > 0) {
+                    if ("lobby".equals(ref.alias())) {
+                        List<Integer> upcoming = upcomingLobbyOrdinals(status.desiredReplicas());
+                        line.append(" upcoming=").append(upcoming);
+                    } else {
+                        line.append(" upcoming=+").append(pending);
+                    }
+                }
+                inv.source().sendMessage(Component.text(line.toString(), NamedTextColor.GRAY));
             }
         }
 
@@ -410,34 +526,27 @@ public class ProxyOpsPlugin {
 
             String workload;
             String kind;
-            switch (target) {
-                case "lobby" -> {
-                    workload = "paper-lobby";
-                    kind = "statefulset";
-                }
-                case "survival" -> {
-                    workload = "paper-survival";
-                    kind = "deployment";
-                }
-                case "creative" -> {
-                    workload = "paper-creative";
-                    kind = "deployment";
-                }
-                default -> {
-                    inv.source().sendMessage(Component.text("Target must be lobby, survival, or creative.", NamedTextColor.RED));
-                    return;
-                }
+            WorkloadRef ref = workloadFromAlias(target);
+            if (ref == null) {
+                inv.source().sendMessage(Component.text("Target must be lobby, survival, or creative.", NamedTextColor.RED));
+                return;
             }
+            workload = ref.workload();
+            kind = ref.kind();
 
             boolean ok = k8s.scaleWorkload(namespace, workload, kind, replicas);
             if (!ok) {
                 inv.source().sendMessage(Component.text("Scale request failed. Check plugin logs.", NamedTextColor.RED));
                 return;
             }
+            activeScaleRequests.put(ref.key(), new ScaleRequest(ref, replicas, Instant.now()));
             inv.source().sendMessage(Component.text(
                     "Scaled " + kind + "/" + workload + " to " + replicas
                             + " (runtime only; declarative specs unchanged).",
                     NamedTextColor.GREEN));
+            announceScaleEvent(
+                    target + " scale requested to " + replicas + " replicas.",
+                    NamedTextColor.YELLOW);
         }
 
         @Override
@@ -489,4 +598,12 @@ public class ProxyOpsPlugin {
             }
         }
     }
+
+    private record WorkloadRef(String alias, String workload, String kind) {
+        String key() {
+            return kind + "/" + workload;
+        }
+    }
+
+    private record ScaleRequest(WorkloadRef workloadRef, int desiredReplicas, Instant requestedAt) {}
 }

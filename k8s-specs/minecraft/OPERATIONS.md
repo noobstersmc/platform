@@ -37,6 +37,8 @@ For end-to-end operational steps, see `minecraft/RUNBOOK.md`.
   - Names are short pod-aware names (for example `lobby-0-3ed187`)
   - Registration updates are event-driven via Kubernetes endpoint watch
   - Periodic sync still runs as fallback (`PROXY_DISCOVERY_INTERVAL_SECONDS`)
+  - `/proxyops servers` shows workload scale status and upcoming capacity during scale-up
+  - Scale progress/completion announcements are sent to users with `proxyops.scale.notify`
 
 ## Redis sync for proxy presence/counts
 - Redis service: `svc/redis` (`deployment/redis`)
@@ -54,3 +56,13 @@ For end-to-end operational steps, see `minecraft/RUNBOOK.md`.
 - Velocity: `online-mode=true`, `player-info-forwarding-mode="modern"`
 - Shared forwarding secret: `secret/velocity-forwarding-secret` key `forwarding.secret`
 - Paper backends: `online-mode=false`, forwarding enabled in `paper-global.yml`
+
+## Persistence checks
+- Current PVC/PV state:
+  - `kubectl -n minecraft get pvc -o wide`
+  - `kubectl get pv`
+- Storage expectations:
+  - Pod restarts keep world/database data because workloads mount PVCs.
+  - `paper-lobby` replicas each have their own PVC.
+  - `paper-survival` and `paper-creative` are single-world deployments and should stay at 1 replica unless moved to per-replica storage.
+  - Kind `standard` class PVs use reclaim policy `Delete`; deleting PVC/PV deletes underlying data.

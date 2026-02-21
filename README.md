@@ -15,3 +15,4 @@ Monorepo for NoobstersMC infrastructure, Kubernetes specs, and server modules.
 - Operations: `k8s-specs/minecraft/OPERATIONS.md`
 - Runbook: `k8s-specs/minecraft/RUNBOOK.md`
 - Player-simulation bot: `tools/mc-bot/README.md`
+- Lobby inspector plugin: `papermc-modules/lobby-inspector/README.md`

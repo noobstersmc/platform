@@ -17,6 +17,7 @@ Aliases: `/proxy`, `/pops`
 ## Permissions
 - `proxyops.use`
 - `proxyops.update`
+- `proxyops.scale.notify` (receive scale progress/completion announcements)
 
 ## Discovery behavior
 - Watches services labeled `mc.noobsters.net/velocity-discovery=enabled`.
@@ -36,6 +37,14 @@ Aliases: `/proxy`, `/pops`
   - else prefix match (`<key>-...`) against discovered names
   - else fallback to static `limbo`
 
+## Scale progress announcements
+- Scale requests are tracked and announced to players with `proxyops.scale.notify`.
+- Announcements are emitted when:
+  - scaling is requested
+  - ready replicas increase
+  - requested scale reaches full readiness
+- `/proxyops servers` includes per-workload scale status and upcoming capacity.
+
 ## Runtime env vars
 - `POD_NAME`
 - `POD_NAMESPACE` (default `minecraft`)
@@ -54,6 +63,7 @@ Aliases: `/proxy`, `/pops`
 - `PROXY_DISCOVERY_INTERVAL_SECONDS` (default `5`)
 - `PROXY_DISCOVERY_WATCH_ENABLED` (default `true`)
 - `PROXY_RUNTIME_CONFIGMAP` (default `proxyops-runtime`)
+- `PROXY_SCALE_NOTIFY_PERMISSION` (default `proxyops.scale.notify`)
 
 ## Build
 ```bash

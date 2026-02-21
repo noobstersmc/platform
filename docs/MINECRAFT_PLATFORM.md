@@ -10,6 +10,12 @@
 - `deployment/luckperms-postgres` (1 replica)
 - `deployment/redis` (1 replica, RedisBungee transport)
 
+## Persistence model
+- Data volumes are PVC-backed for all Paper worlds and LuckPerms Postgres.
+- `paper-lobby` uses `StatefulSet` `volumeClaimTemplates`, so each lobby replica gets independent storage.
+- `paper-survival` and `paper-creative` each use one shared PVC per workload and are intended to run as single-replica world instances.
+- On this Kind cluster, storage class is `standard` with PV reclaim policy `Delete`, so data persists across pod restarts and node/container restarts, but deleting the PVC/PV removes data.
+
 ## Traffic model
 - Client entrypoint is `svc/velocity-proxy` (`NodePort`).
 - HAProxy routes:

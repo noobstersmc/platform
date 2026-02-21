@@ -504,7 +504,7 @@ spec:
           useSSL: false
           cluster-mode-enabled: false
           kick-when-online: true
-          reconnect-to-last-server: false
+          reconnect-to-last-server: true
           handle-motd: true
           RBCONF
           cat > /work/plugins/luckperms/config.yml <<LPCONF
@@ -1174,6 +1174,21 @@ spec:
         volumeMounts:
         - name: paper-data
           mountPath: /data
+      - name: install-lobby-inspector
+        image: bash:5.2
+        command:
+        - /usr/local/bin/bash
+        - -ec
+        - |
+          mkdir -p /data/plugins
+          if [[ -f /plugin-src/LobbyInspector.jar ]]; then
+            cp /plugin-src/LobbyInspector.jar /data/plugins/LobbyInspector.jar
+          fi
+        volumeMounts:
+        - name: paper-data
+          mountPath: /data
+        - name: lobby-inspector-plugin
+          mountPath: /plugin-src
       containers:
       - name: minecraft
         image: itzg/minecraft-server:latest
@@ -1222,6 +1237,10 @@ spec:
       - name: paper-proxy-config
         configMap:
           name: paper-proxy-config
+      - name: lobby-inspector-plugin
+        configMap:
+          name: lobby-inspector-plugin
+          optional: true
   volumeClaimTemplates:
   - metadata:
       name: paper-data

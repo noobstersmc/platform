@@ -264,6 +264,29 @@ public class KubernetesClient {
         }
     }
 
+    public WorkloadStatus getWorkloadStatus(String namespace, String workloadName, String workloadKind) {
+        if (bearer.isBlank()) {
+            return null;
+        }
+        try {
+            String resource = "deployments";
+            if ("statefulset".equalsIgnoreCase(workloadKind) || "statefulsets".equalsIgnoreCase(workloadKind)) {
+                resource = "statefulsets";
+            }
+            String path = "/apis/apps/v1/namespaces/" + namespace + "/" + resource + "/" + workloadName;
+            JsonObject root = get(path);
+            if (root == null) {
+                return null;
+            }
+            int desired = intPath(root, "spec", "replicas");
+            int ready = intPath(root, "status", "readyReplicas");
+            return new WorkloadStatus(workloadName, workloadKind, desired, ready);
+        } catch (Exception e) {
+            logger.error("Failed to get workload status for {}/{}", workloadKind, workloadName, e);
+            return null;
+        }
+    }
+
     public boolean watchDiscoverableEndpointEvents(
             String namespace,
             String labelKey,
@@ -418,6 +441,24 @@ public class KubernetesClient {
         return c.getAsJsonArray();
     }
 
+    private static int intPath(JsonObject obj, String... path) {
+        JsonElement e = obj;
+        for (String p : path) {
+            if (e == null || !e.isJsonObject()) {
+                return 0;
+            }
+            e = e.getAsJsonObject().get(p);
+        }
+        if (e == null || e.isJsonNull()) {
+            return 0;
+        }
+        try {
+            return e.getAsInt();
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
     private static String podHint(String podName, String ip) {
         if (podName == null || podName.isBlank()) {
             return ip.replace('.', '-');
@@ -439,5 +480,6 @@ public class KubernetesClient {
 
     public record PodRef(String name, String podIp, boolean ready) {}
     public record BackendRef(String name, String host, int port, int readyEndpoints) {}
+    public record WorkloadStatus(String workloadName, String workloadKind, int desiredReplicas, int readyReplicas) {}
     private record EndpointRef(String ip, String podName, String podUid) {}
 }

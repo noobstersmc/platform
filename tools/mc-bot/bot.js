@@ -36,6 +36,7 @@ const config = {
   autoReconnect: env('MC_AUTO_RECONNECT', 'true') !== 'false',
   autoJoinSurvival: env('MC_AUTO_JOIN_SURVIVAL', 'true') !== 'false',
   targetServerPrefix: env('MC_TARGET_SERVER_PREFIX', 'survival-'),
+  autoJoinCommandTemplate: env('MC_AUTO_JOIN_COMMAND_TEMPLATE', '/server {server}'),
   controlEnabled: env('MC_CONTROL_ENABLED', 'true') !== 'false',
   controlHost: env('MC_CONTROL_HOST', '127.0.0.1'),
   controlPort: Number(env('MC_CONTROL_PORT', '30077')),
@@ -91,6 +92,7 @@ const config = {
   autonomousMoveRadiusMax: Number(env('MC_AUTONOMOUS_MOVE_RADIUS_MAX', '18')),
   autonomousObjectiveLockMs: Number(env('MC_AUTONOMOUS_OBJECTIVE_LOCK_MS', '120000')),
   autonomousObjectiveRetryLimit: Number(env('MC_AUTONOMOUS_OBJECTIVE_RETRY_LIMIT', '10')),
+  autonomousAvoidHoles: env('MC_AUTONOMOUS_AVOID_HOLES', 'true') !== 'false',
   autonomousCombatTickMs: Number(env('MC_AUTONOMOUS_COMBAT_TICK_MS', '350')),
   autonomousGatherTickMs: Number(env('MC_AUTONOMOUS_GATHER_TICK_MS', '500')),
   autonomousLootTickMs: Number(env('MC_AUTONOMOUS_LOOT_TICK_MS', '400')),
@@ -129,6 +131,13 @@ const autonomy = {
   lastError: null,
   lastDecision: null,
   lastActionResult: null,
+}
+const planner = {
+  inFlight: false,
+  next: null,
+  lastRequestedAt: 0,
+  lastCompletedAt: 0,
+  lastError: null,
 }
 const explicitMove = { inProgress: false }
 const explorer = {
@@ -176,9 +185,25 @@ const watchdog = {
   blockedActions: new Map(),
   failureCounts: new Map(),
 }
+const placementState = {
+  blockedTargets: new Map(),
+}
 const joinState = {
   attempted: false,
   joined: false,
+  target: null,
+  attemptedCommands: new Set(),
+  lastFailureAt: 0,
+  lastHintAt: 0,
+  lastAttemptAt: 0,
+  attemptCount: 0,
+}
+const worldState = {
+  serverName: null,
+}
+const fallbackState = {
+  target: null,
+  createdAt: 0,
 }
 
 function pushMemory(type, data) {
@@ -494,6 +519,15 @@ function stripAnsi(text) {
   return String(text || '').replace(/\u001b\[[0-9;]*m/g, '')
 }
 
+function sanitizeServerToken(token) {
+  const clean = String(token || '')
+    .replace(/§[0-9A-FK-ORa-fk-or]/g, '')
+    .replace(/[^\w.-]/g, ' ')
+    .trim()
+  const match = clean.match(/[A-Za-z0-9][A-Za-z0-9._-]*/)
+  return match ? match[0] : ''
+}
+
 function maybeJoinSurvivalFromServerList(messageText) {
   if (!bot || !connected || !config.autoJoinSurvival) return
   if (joinState.joined || joinState.attempted) return
@@ -504,15 +538,64 @@ function maybeJoinSurvivalFromServerList(messageText) {
   const listText = plain.slice(idx + marker.length)
   const servers = listText
     .split(',')
-    .map((s) => s.trim())
+    .map((s) => sanitizeServerToken(s))
     .filter(Boolean)
   const target = servers.find((s) => s.startsWith(config.targetServerPrefix))
   if (!target) return
 
   joinState.attempted = true
-  bot.chat(`/server ${target}`)
-  pushMemory('auto_join_server', { target, source: 'server_list' })
-  autoLog('auto-join survival', { target })
+  joinState.target = target
+  joinState.attemptedCommands.clear()
+  joinState.attemptCount = 0
+  joinState.lastAttemptAt = 0
+  const primaryCmd = config.autoJoinCommandTemplate.replace(/\{server\}/g, target).trim()
+  const primaryNormalized = primaryCmd.startsWith('/') ? primaryCmd : `/${primaryCmd}`
+  joinState.attemptedCommands.add(primaryNormalized)
+  bot.chat(primaryNormalized)
+  joinState.lastAttemptAt = Date.now()
+  joinState.attemptCount += 1
+  pushMemory('auto_join_server', { target, source: 'server_list', command: primaryNormalized, attempt: joinState.attemptCount })
+  autoLog('auto-join survival', { target, command: primaryNormalized, attempt: joinState.attemptCount })
+}
+
+function updateServerContextFromMessage(messageText) {
+  const plain = stripAnsi(messageText)
+  const match = plain.match(/connected to\s+([A-Za-z0-9._-]+)/i)
+  if (!match) return
+  worldState.serverName = match[1]
+  pushMemory('server_context', {
+    serverName: worldState.serverName,
+  })
+}
+
+function isLobbyServerContext() {
+  const name = String(worldState.serverName || '').toLowerCase()
+  return name.startsWith('lobby-') || name === 'lobby'
+}
+
+function tryAutoJoinTarget(reason = 'retry') {
+  if (!bot || !connected || !joinState.target) return false
+  if (joinState.joined) return false
+  const now = Date.now()
+  if (now - joinState.lastAttemptAt < 7000) return false
+  const cmdRaw = config.autoJoinCommandTemplate.replace(/\{server\}/g, joinState.target).trim()
+  const command = cmdRaw.startsWith('/') ? cmdRaw : `/${cmdRaw}`
+  bot.chat(command)
+  joinState.lastAttemptAt = now
+  joinState.attemptCount += 1
+  pushMemory('auto_join_server_retry', {
+    target: joinState.target,
+    command,
+    attempt: joinState.attemptCount,
+    reason,
+  })
+  autoLog('auto-join retry', {
+    target: joinState.target,
+    command,
+    attempt: joinState.attemptCount,
+    reason,
+  })
+  return true
 }
 
 function findClosestHostile(observation) {
@@ -641,6 +724,24 @@ function isBlockReachableLikePlayer(block, maxDistance = 4.6) {
   if (!block?.position) return false
   if (distanceToPosition(block.position) > maxDistance) return false
   return canSeeBlockLikePlayer(block, Math.ceil(maxDistance))
+}
+
+function isUnsafeHoleDig(block) {
+  if (!config.autonomousAvoidHoles) return false
+  if (!bot?.entity?.position || !block?.position) return false
+  if (isWoodBlock(block.name)) return false
+
+  const feetY = Math.floor(bot.entity.position.y)
+  const by = block.position.y
+  const dx = block.position.x - bot.entity.position.x
+  const dz = block.position.z - bot.entity.position.z
+  const horiz = Math.sqrt(dx * dx + dz * dz)
+
+  // Avoid digging floor/support around our feet which traps the bot in pits.
+  if (horiz <= 1.35 && by <= feetY) return true
+  // Avoid digging directly below feet even with slight coord jitter.
+  if (horiz <= 0.8 && by <= feetY + 1) return true
+  return false
 }
 
 function isSafeHarvestBlock(blockName) {
@@ -778,15 +879,72 @@ function findBestEdibleInventoryItem() {
   return cooked || items[0]
 }
 
+function inventoryCountByName(itemName) {
+  if (!itemName || !bot?.inventory || typeof bot.inventory.items !== 'function') return 0
+  return bot.inventory
+    .items()
+    .reduce((sum, it) => (it?.name === itemName ? sum + (Number(it.count) || 0) : sum), 0)
+}
+
 function countEdibleInventoryItems() {
   if (!bot?.inventory || typeof bot.inventory.items !== 'function') return 0
   return bot.inventory.items().reduce((sum, it) => (isEdibleItemName(it?.name) ? sum + (Number(it.count) || 0) : sum), 0)
 }
 
+function missingBasicWoodenTools() {
+  const tools = ['wooden_pickaxe', 'wooden_axe', 'wooden_shovel', 'wooden_sword']
+  return tools.filter((tool) => countInventoryMatching((it) => it?.name === tool) <= 0)
+}
+
+function hasBasicWoodenTools() {
+  return missingBasicWoodenTools().length === 0
+}
+
+function preferredToolKindForBlock(blockName) {
+  const name = String(blockName || '')
+  if (!name) return null
+  if (/(stone|cobblestone|ore|deepslate|obsidian|netherrack|bricks?|concrete|terracotta|sandstone|quartz)/.test(name)) return 'pickaxe'
+  if (/(dirt|grass_block|sand|gravel|clay|snow|mud|farmland|soul_sand|soul_soil)/.test(name)) return 'shovel'
+  if (/_log$|_wood$|planks|crafting_table|chest|bookshelf|bamboo_block/.test(name)) return 'axe'
+  return null
+}
+
+function findBestToolForBlock(blockName) {
+  const invItems = bot?.inventory?.items?.() || []
+  if (invItems.length === 0) return null
+  const kind = preferredToolKindForBlock(blockName)
+  if (!kind) return null
+  const preference = {
+    pickaxe: ['diamond_pickaxe', 'netherite_pickaxe', 'iron_pickaxe', 'stone_pickaxe', 'golden_pickaxe', 'wooden_pickaxe'],
+    shovel: ['diamond_shovel', 'netherite_shovel', 'iron_shovel', 'stone_shovel', 'golden_shovel', 'wooden_shovel'],
+    axe: ['diamond_axe', 'netherite_axe', 'iron_axe', 'stone_axe', 'golden_axe', 'wooden_axe'],
+  }[kind] || []
+  for (const name of preference) {
+    const tool = invItems.find((it) => it?.name === name)
+    if (tool) return tool
+  }
+  return invItems.find((it) => it?.name?.includes(`_${kind}`)) || null
+}
+
 function chooseDeterministicObjective(observation) {
+  if (isLobbyServerContext()) return null
   const hunger = observation?.food ?? 20
   const edible = findBestEdibleInventoryItem()
   if (hunger <= 17 && edible) return { type: 'eat_food', notes: `eat ${edible.name}` }
+  const crafting = observation?.crafting
+  const hasTableInInventory = Boolean(crafting?.hasCraftingTableInInventory)
+  const hasNearbyTable = Boolean(crafting?.nearbyCraftingTable)
+  const holdingTable = bot?.heldItem?.name === 'crafting_table'
+  const planksCount = countInventoryMatching((it) => /_planks$/.test(String(it?.name || '')))
+  const stickCount = countInventoryMatching((it) => it?.name === 'stick')
+  const missingTools = missingBasicWoodenTools()
+  const hasAnyToolGap = missingTools.length > 0
+  if (!hasNearbyTable && (holdingTable || hasTableInInventory)) {
+    return { type: 'setup_crafting', notes: 'place crafting table nearby' }
+  }
+  if (hasAnyToolGap && (hasTableInInventory || hasNearbyTable) && planksCount >= 3 && stickCount >= 2) {
+    return { type: 'setup_crafting', notes: `craft missing wooden tools: ${missingTools.join(', ')}` }
+  }
   if (hunger <= 8) return { type: 'hunt_food', notes: 'low hunger' }
   if (countWoodUnits() < 4) return { type: 'gather_wood', notes: 'low wood inventory' }
   return null
@@ -794,6 +952,12 @@ function chooseDeterministicObjective(observation) {
 
 function chooseNextTickDelay() {
   const now = Date.now()
+  if (planner.inFlight) {
+    return 650
+  }
+  if (bot?.pathfinder && typeof bot.pathfinder.isMoving === 'function' && bot.pathfinder.isMoving()) {
+    return 350
+  }
   if (lootState.targetId && now - lootState.updatedAt < 4000) {
     return Math.max(250, config.autonomousLootTickMs)
   }
@@ -806,7 +970,7 @@ function chooseNextTickDelay() {
   if (objectiveState.type === 'eat_food') {
     return Math.max(250, config.autonomousLootTickMs)
   }
-  return config.autonomousTickMs
+  return Math.max(350, Math.min(config.autonomousTickMs, 1200))
 }
 
 function isActionBlocked(action) {
@@ -849,7 +1013,7 @@ function recordProgress(action, beforeObservation, afterObservation, result) {
       const post = afterObservation?.position
       if (pre && post) {
         const moved = Math.sqrt((pre.x - post.x) ** 2 + (pre.y - post.y) ** 2 + (pre.z - post.z) ** 2)
-        progressed = moved >= 0.7
+        progressed = moved >= 0.2
       }
     }
   }
@@ -864,7 +1028,34 @@ function recordProgress(action, beforeObservation, afterObservation, result) {
 
 function shouldForceRecovery() {
   const staleMs = Date.now() - watchdog.lastProgressAt
-  return staleMs > 30000 || watchdog.noProgressTicks >= 12
+  return staleMs > 45000 || watchdog.noProgressTicks >= 40
+}
+
+function placementKey(pos) {
+  if (!pos) return null
+  const x = Number(pos.x)
+  const y = Number(pos.y)
+  const z = Number(pos.z)
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null
+  return `${Math.floor(x)}:${Math.floor(y)}:${Math.floor(z)}`
+}
+
+function isPlacementBlocked(pos) {
+  const key = placementKey(pos)
+  if (!key) return false
+  const until = placementState.blockedTargets.get(key)
+  if (!until) return false
+  if (until <= Date.now()) {
+    placementState.blockedTargets.delete(key)
+    return false
+  }
+  return true
+}
+
+function blockPlacementTarget(pos, ttlMs = 60000) {
+  const key = placementKey(pos)
+  if (!key) return
+  placementState.blockedTargets.set(key, Date.now() + Math.max(5000, ttlMs))
 }
 
 function clearObjective(reason) {
@@ -938,7 +1129,6 @@ function forcedDecisionForObjective(observation) {
     }
 
     const nearWood = findNearestWoodBlock(7)
-    objectiveState.retries += 1
     objectiveState.lastUpdatedAt = Date.now()
     if (nearWood && bot?.canDigBlock?.(nearWood) && isBlockReachableLikePlayer(nearWood)) {
       objectiveState.target = {
@@ -976,7 +1166,6 @@ function forcedDecisionForObjective(observation) {
 
   if (objectiveState.type === 'hunt_food') {
     const pig = findNearestEntityByNames(['pig', 'cow', 'chicken', 'sheep'], 30)
-    objectiveState.retries += 1
     objectiveState.lastUpdatedAt = Date.now()
     if (!pig) {
       return {
@@ -1023,6 +1212,112 @@ function forcedDecisionForObjective(observation) {
       action: 'equip',
       payload: { itemName: edible.name, destination: 'hand' },
       reason: `Objective eat_food: equip ${edible.name}`,
+    }
+  }
+
+  if (objectiveState.type === 'setup_crafting') {
+    const missingTools = missingBasicWoodenTools()
+
+    const nearbyTable = typeof bot.findBlock === 'function'
+      ? bot.findBlock({ maxDistance: 5, matching: (block) => block?.name === 'crafting_table' })
+      : null
+    if (nearbyTable) {
+      const reachableTable = isBlockReachableLikePlayer(nearbyTable, 4.6)
+      const hasPlanks = countInventoryMatching((it) => /_planks$/.test(String(it?.name || ''))) >= 3
+      const hasSticks = countInventoryMatching((it) => it?.name === 'stick') >= 2
+      if (missingTools.length === 0) {
+        clearObjective('basic wooden tools crafted')
+        return null
+      }
+      if (!reachableTable) {
+        return {
+          action: 'move',
+          payload: { x: nearbyTable.position.x, y: nearbyTable.position.y, z: nearbyTable.position.z, range: 1.6, blocking: false },
+          reason: 'Objective setup_crafting: moving to reachable crafting table',
+        }
+      }
+      if (!hasPlanks) {
+        return {
+          action: 'craft',
+          payload: { itemName: 'planks', count: 4 },
+          reason: 'Objective setup_crafting: craft planks before tools',
+        }
+      }
+      if (!hasSticks) {
+        return {
+          action: 'craft',
+          payload: { itemName: 'stick', count: 4 },
+          reason: 'Objective setup_crafting: craft sticks before tools',
+        }
+      }
+      const nextTool = missingTools[0]
+      return {
+        action: 'craft',
+        payload: {
+          itemName: nextTool,
+          count: 1,
+          table: {
+            x: nearbyTable.position.x,
+            y: nearbyTable.position.y,
+            z: nearbyTable.position.z,
+          },
+        },
+        reason: `Objective setup_crafting: craft ${nextTool}`,
+      }
+    }
+
+    const hasTableInInventory = countInventoryMatching((it) => it?.name === 'crafting_table') > 0
+    if (!hasTableInInventory) {
+      clearObjective('missing crafting table')
+      return null
+    }
+
+    if (bot?.heldItem?.name !== 'crafting_table') {
+      return {
+        action: 'equip',
+        payload: { itemName: 'crafting_table', destination: 'hand' },
+        reason: 'Objective setup_crafting: equip crafting_table',
+      }
+    }
+
+    const base = bot?.entity?.position?.floored()
+    if (base) {
+      const candidates = []
+      for (let dx = -3; dx <= 3; dx += 1) {
+        for (let dz = -3; dz <= 3; dz += 1) {
+          const refPos = base.offset(dx, -1, dz)
+          const targetPos = base.offset(dx, 0, dz)
+          if (isPlacementBlocked(targetPos)) continue
+          const ref = bot.blockAt(refPos)
+          const target = bot.blockAt(targetPos)
+          if (!ref || !target) continue
+          const refSolid = String(ref.name || '') !== 'air' && String(ref.name || '') !== 'water'
+          const targetFree = String(target.name || '') === 'air' || String(target.name || '') === 'cave_air'
+          if (!refSolid || !targetFree) continue
+          if (!isBlockReachableLikePlayer(ref, 4.6)) continue
+          if (distanceToPosition(targetPos) < 1.1) continue
+          const d = Math.sqrt(dx * dx + dz * dz)
+          candidates.push({ refPos, d })
+        }
+      }
+      candidates.sort((a, b) => a.d - b.d)
+      const best = candidates[0]
+      if (best) {
+        return {
+          action: 'place',
+          payload: {
+            reference: { x: best.refPos.x, y: best.refPos.y, z: best.refPos.z },
+            face: { x: 0, y: 1, z: 0 },
+          },
+          reason: 'Objective setup_crafting: place crafting_table on reachable ground',
+        }
+      }
+    }
+
+    return {
+      action: 'move',
+      payload: { ...(chooseExploreTarget() || observation.position), range: 2, blocking: false },
+      reason: 'Objective setup_crafting: reposition for valid table placement',
     }
   }
 
@@ -1364,6 +1659,90 @@ function chooseExploreTarget() {
   return { x, y, z, range: 2 }
 }
 
+function chooseLocalRecoveryTarget(radius = 3) {
+  const base = bot?.entity?.position
+  if (!base) return null
+  const angle = Math.random() * Math.PI * 2
+  const dist = Math.max(1.5, Math.random() * Math.max(2, radius))
+  const x = Math.round(base.x + Math.cos(angle) * dist)
+  const z = Math.round(base.z + Math.sin(angle) * dist)
+  const y = Math.round(base.y)
+  return { x, y, z, range: 1.5, blocking: false }
+}
+
+function requestPlannerDecision(observation, priorityState, recentEvents, operatorDirective) {
+  const now = Date.now()
+  if (planner.inFlight) return
+  if (now - planner.lastRequestedAt < 500) return
+  planner.inFlight = true
+  planner.lastRequestedAt = now
+  const snapshotGoal = runtimeGoal
+
+  openRouterDecision(observation, recentEvents, priorityState, operatorDirective)
+    .then((rawDecision) => {
+      const normalized = normalizeAutonomousDecision(rawDecision)
+      if (!normalized.ok) {
+        planner.lastError = normalized.error
+        return
+      }
+      planner.next = {
+        decision: normalized,
+        createdAt: Date.now(),
+        goal: snapshotGoal,
+      }
+      planner.lastError = null
+      autoLog('planner queued decision', normalized)
+    })
+    .catch((err) => {
+      planner.lastError = err?.message || String(err)
+      autoLog('planner error', { error: planner.lastError })
+    })
+    .finally(() => {
+      planner.inFlight = false
+      planner.lastCompletedAt = Date.now()
+    })
+}
+
+function takePlannerDecision(maxAgeMs = 12000) {
+  if (!planner.next) return null
+  const queued = planner.next
+  planner.next = null
+  if (Date.now() - queued.createdAt > maxAgeMs) return null
+  return queued.decision
+}
+
+function continuousFallbackDecision(observation, priorityState) {
+  if (priorityState?.nearestHostile && Number(priorityState.nearestHostile.distance) < 10) {
+    const target = chooseExploreTarget()
+    return {
+      action: 'move',
+      payload: target || { x: observation.position.x, y: observation.position.y, z: observation.position.z, range: 3 },
+      reason: 'Fallback: keep retreating from nearby hostile while planner thinks',
+    }
+  }
+  if (bot?.pathfinder && typeof bot.pathfinder.isMoving === 'function' && bot.pathfinder.isMoving()) {
+    return { action: 'observe', payload: {}, reason: 'Fallback: continuing current movement while planner thinks' }
+  }
+  if (!objectiveState.type && Date.now() - watchdog.lastProgressAt < 8000) {
+    return { action: 'observe', payload: {}, reason: 'Fallback: hold briefly while planner thinks' }
+  }
+  if (fallbackState.target && Date.now() - fallbackState.createdAt < 2200) {
+    return {
+      action: 'move',
+      payload: { ...fallbackState.target, blocking: false },
+      reason: 'Fallback: continue short move while planner thinks',
+    }
+  }
+  const nextTarget = chooseLocalRecoveryTarget(2) || { x: observation.position.x, y: observation.position.y, z: observation.position.z, range: 1.5 }
+  fallbackState.target = nextTarget
+  fallbackState.createdAt = Date.now()
+  return {
+    action: 'move',
+    payload: { ...nextTarget, blocking: false },
+    reason: 'Fallback: keep moving while planner thinks',
+  }
+}
+
 function scheduleExploreTick(delayMs = config.autonomousContinuousMoveTickMs) {
   if (!explorer.enabled || shuttingDown) return
   if (explorer.timer) clearTimeout(explorer.timer)
@@ -1528,6 +1907,41 @@ async function runAutonomyTick() {
     const observation = buildObservation()
     const priorityState = buildPriorityState(observation)
     autoLog('priority state', priorityState)
+    if (isLobbyServerContext()) {
+      clearObjective('in lobby awaiting survival transfer')
+      tryAutoJoinTarget('lobby poll')
+      const now = Date.now()
+      if (now - joinState.lastHintAt > 15000) {
+        joinState.lastHintAt = now
+        autoLog('lobby mode', {
+          server: worldState.serverName,
+          joinTarget: joinState.target,
+          autoJoinTemplate: config.autoJoinCommandTemplate,
+          hint: 'Set MC_AUTO_JOIN_COMMAND_TEMPLATE to the correct command for your server network.',
+        })
+      }
+      const decision = {
+        ok: true,
+        action: 'observe',
+        payload: {},
+        reason: 'In lobby; pausing survival actions until server transfer succeeds',
+      }
+      autonomy.lastDecision = decision
+      pushMemory('autonomy_decision', {
+        action: decision.action,
+        reason: decision.reason,
+        payload: decision.payload,
+      })
+      const result = await runAction(decision.action, decision.payload)
+      autonomy.lastActionResult = result
+      pushMemory('autonomy_action_result', {
+        action: decision.action,
+        ok: result.ok === true,
+        result,
+      })
+      scheduleAutonomyTick(1500)
+      return
+    }
     const recentEvents = getRecentMemory(config.autonomousMemoryWindow)
     const operatorDirective = getActiveDirective()
     if (operatorDirective) {
@@ -1546,16 +1960,28 @@ async function runAutonomyTick() {
     const forcedObjectiveDecision = shouldKeepObjective() ? forcedDecisionForObjective(observation) : null
     if (forcedObjectiveDecision) {
       decision = normalizeAutonomousDecision(forcedObjectiveDecision)
+      fallbackState.target = null
+      fallbackState.createdAt = 0
       autoLog('objective decision override', {
         objective: objectiveState.type,
         decision: forcedObjectiveDecision,
       })
     } else {
-      const modelStartedAt = Date.now()
-      const rawDecision = await openRouterDecision(observation, recentEvents, priorityState, operatorDirective)
-      autoLog('model raw decision', rawDecision)
-      autoLog('model latency', { ms: Date.now() - modelStartedAt })
-      decision = normalizeAutonomousDecision(rawDecision)
+      requestPlannerDecision(observation, priorityState, recentEvents, operatorDirective)
+      const queued = takePlannerDecision()
+      if (queued) {
+        decision = queued
+        fallbackState.target = null
+        fallbackState.createdAt = 0
+        autoLog('planner decision consumed', queued)
+      } else {
+        decision = normalizeAutonomousDecision(continuousFallbackDecision(observation, priorityState))
+        autoLog('planner pending fallback', {
+          inFlight: planner.inFlight,
+          lastError: planner.lastError,
+          decision,
+        })
+      }
     }
     if (!decision.ok) throw new Error(decision.error)
 
@@ -1583,6 +2009,7 @@ async function runAutonomyTick() {
       isBlockReachableLikePlayer(nearbyHarvest) &&
       !isHarvestTargetBlocked(nearbyHarvest.position) &&
       objectiveState.type !== 'hunt_food' &&
+      objectiveState.type !== 'setup_crafting' &&
       (observation?.food ?? 20) > 8 &&
       ['observe', 'move', 'none'].includes(decision.action)
     ) {
@@ -1604,9 +2031,14 @@ async function runAutonomyTick() {
       autoLog('emergency override', decision)
     }
 
+    const hostileTooCloseForLoot =
+      Boolean(priorityState.nearestHostile) &&
+      Number(priorityState.nearestHostile.distance) < 14
+    const unsafeForLoot = hostileTooCloseForLoot || (observation?.health ?? 20) <= 10
     if (
       nearbyDrop &&
       nearbyDrop.distance > 1.1 &&
+      !unsafeForLoot &&
       ['observe', 'move', 'none'].includes(decision.action) &&
       (!objectiveState.type || objectiveState.type !== 'hunt_food' || nearbyDrop.distance < 5)
     ) {
@@ -1644,16 +2076,30 @@ async function runAutonomyTick() {
       }
     }
 
-    if (shouldForceRecovery() || watchdog.sameDecisionCount >= 8) {
-      clearObjective('watchdog recovery')
-      const recoveryTarget = chooseExploreTarget()
+    const recoverySensitiveAction = ['dig', 'craft', 'attack', 'place'].includes(decision.action)
+    const allowWatchdogRecovery = Boolean(objectiveState.type) || recoverySensitiveAction
+    if ((allowWatchdogRecovery && shouldForceRecovery()) || watchdog.sameDecisionCount >= 12) {
+      const stickySetupCrafting = objectiveState.type === 'setup_crafting'
+      if (!stickySetupCrafting) {
+        clearObjective('watchdog recovery')
+      }
+      const recoveryTarget = stickySetupCrafting
+        ? chooseLocalRecoveryTarget(3)
+        : chooseExploreTarget()
       if (recoveryTarget) {
         decision.action = 'move'
-        decision.payload = { ...recoveryTarget, range: 2, blocking: false }
-        decision.reason = 'Watchdog recovery: forced reposition to break stuck loop'
+        decision.payload = {
+          ...recoveryTarget,
+          range: Number.isFinite(Number(recoveryTarget.range)) ? Number(recoveryTarget.range) : 2,
+          blocking: false,
+        }
+        decision.reason = stickySetupCrafting
+          ? 'Watchdog recovery: local reposition for crafting setup'
+          : 'Watchdog recovery: forced reposition to break stuck loop'
         autoLog('watchdog forced recovery', {
           noProgressTicks: watchdog.noProgressTicks,
           sameDecisionCount: watchdog.sameDecisionCount,
+          objective: objectiveState.type,
           target: recoveryTarget,
         })
       }
@@ -1725,19 +2171,22 @@ async function runAutonomyTick() {
       config.autonomousActionTimeoutMs
     )
     const afterObservation = buildObservation()
+    if (objectiveState.type && result?.ok === false) {
+      objectiveState.retries += 1
+      objectiveState.lastUpdatedAt = Date.now()
+      autoLog('objective action failed', {
+        objective: objectiveState.type,
+        retries: objectiveState.retries,
+        error: result.error || 'unknown',
+      })
+    } else if (objectiveState.type && result?.ok === true) {
+      objectiveState.retries = Math.max(0, objectiveState.retries - 1)
+      objectiveState.lastUpdatedAt = Date.now()
+    }
     if (objectiveState.type === 'gather_wood') {
-      if (result?.ok === false) {
-        objectiveState.retries += 1
-        autoLog('objective action failed', {
-          objective: objectiveState.type,
-          retries: objectiveState.retries,
-          error: result.error || 'unknown',
-        })
-      } else {
-        const latestWood = countWoodUnits()
-        if (latestWood > objectiveState.baselineWood) {
-          clearObjective('wood gained')
-        }
+      const latestWood = countWoodUnits()
+      if (latestWood > objectiveState.baselineWood) {
+        clearObjective('wood gained')
       }
     }
     if (decision.action === 'dig' && result?.ok === false) {
@@ -1761,9 +2210,6 @@ async function runAutonomyTick() {
       lootState.updatedAt = Date.now()
     }
     if (objectiveState.type === 'hunt_food' && result?.ok === true) {
-      if (decision.action === 'attack' || decision.action === 'move') {
-        objectiveState.retries = Math.max(0, objectiveState.retries - 1)
-      }
       if ((observation?.food ?? 20) >= 12) {
         clearObjective('hunger recovered')
       }
@@ -1787,8 +2233,18 @@ async function runAutonomyTick() {
         })
       }
     }
+    if (objectiveState.type === 'setup_crafting' && hasBasicWoodenTools()) {
+      clearObjective('basic wooden tools crafted')
+    }
     if (result?.ok === false) {
       recordFailure(decision.action, result?.error)
+      if (decision.action === 'place' && String(result?.error || '').includes('blockUpdate')) {
+        const ref = parseVec3(decision.payload?.reference) || parseVec3(decision.payload)
+        const face = parseVec3(decision.payload?.face) || new Vec3(0, 1, 0)
+        if (ref) {
+          blockPlacementTarget({ x: ref.x + face.x, y: ref.y + face.y, z: ref.z + face.z }, 90000)
+        }
+      }
     } else {
       watchdog.failureCounts.clear()
     }
@@ -1959,8 +2415,17 @@ function connect(reason) {
     }
     console.log(`[CHAT] ${rendered}`)
     pushMemory('chat', { text: rendered })
+    updateServerContextFromMessage(rendered)
     maybeJoinSurvivalFromServerList(rendered)
     const plain = stripAnsi(rendered)
+    if (
+      joinState.attempted &&
+      joinState.target &&
+      /unknown or incomplete command/i.test(plain)
+    ) {
+      joinState.lastFailureAt = Date.now()
+      tryAutoJoinTarget('command rejected')
+    }
     if (/\bconnected to\b/i.test(plain) && plain.includes(config.targetServerPrefix)) {
       joinState.joined = true
       pushMemory('auto_join_server_confirmed', { text: plain })
@@ -2148,7 +2613,7 @@ async function runAction(action, payload = {}) {
       if (!point) return { ok: false, error: 'x,y,z are required numbers' }
       const range = Number.isFinite(Number(payload.range)) ? Number(payload.range) : 1
       const goal = new goals.GoalNear(point.x, point.y, point.z, range)
-      const blocking = payload.blocking !== false
+      const blocking = payload.blocking === true
       if (!blocking) {
         bot.pathfinder.setGoal(goal, false)
         pushMemory('action_move', { target: point, range, blocking: false })
@@ -2196,17 +2661,40 @@ async function runAction(action, payload = {}) {
       if (!point) return { ok: false, error: 'x,y,z are required numbers' }
       const block = bot.blockAt(point)
       if (!block) return { ok: false, error: 'block not found' }
+      if (!block.diggable || ['air', 'cave_air', 'void_air', 'water', 'lava'].includes(String(block.name || ''))) {
+        return { ok: false, error: `target block is not diggable: ${block.name}` }
+      }
       if (!isBlockReachableLikePlayer(block, 4.6)) {
         return { ok: false, error: 'block is not reachable with normal survival interaction (distance/line-of-sight)' }
       }
+      if (isUnsafeHoleDig(block)) {
+        return { ok: false, error: `dig blocked to avoid trapping in hole: ${block.name}` }
+      }
       if (!bot.canDigBlock(block)) return { ok: false, error: `cannot dig ${block.name}` }
+      const preferredTool = findBestToolForBlock(block.name)
+      if (preferredTool && bot?.heldItem?.name !== preferredTool.name) {
+        await bot.equip(preferredTool, 'hand')
+      }
       await bot.dig(block)
       pushMemory('action_dig', { block: block.name, position: point })
-      return { ok: true, block: block.name, position: point }
+      return { ok: true, block: block.name, position: point, tool: bot?.heldItem?.name || null }
     }
 
     if (name === 'place') {
-      const reference = parseVec3(payload.reference) || parseVec3(payload) || parseVec3(payload.target)
+      const explicitReference = parseVec3(payload.reference)
+      const directTarget =
+        !explicitReference
+          ? (parseVec3(payload.position) || parseVec3(payload) || parseVec3(payload.target))
+          : null
+
+      let reference = explicitReference
+      let face = parseVec3(payload.face) || new Vec3(0, 1, 0)
+      if (directTarget && !reference) {
+        // Treat raw x/y/z payload as desired placement target and infer support block below.
+        reference = new Vec3(directTarget.x, directTarget.y - 1, directTarget.z)
+        face = new Vec3(0, 1, 0)
+      }
+
       if (!reference) return { ok: false, error: 'reference{x,y,z} is required' }
 
       const refBlock = bot.blockAt(reference)
@@ -2214,8 +2702,8 @@ async function runAction(action, payload = {}) {
       if (!isBlockReachableLikePlayer(refBlock, 4.6)) {
         return { ok: false, error: 'reference block is not reachable with normal survival interaction (distance/line-of-sight)' }
       }
+      if (!bot.heldItem) return { ok: false, error: 'cannot place: no block item equipped in hand' }
 
-      const face = parseVec3(payload.face) || new Vec3(0, 1, 0)
       await bot.placeBlock(refBlock, face)
       pushMemory('action_place', { reference, face })
       return { ok: true, reference, face }
@@ -2237,6 +2725,18 @@ async function runAction(action, payload = {}) {
     }
 
     if (name === 'interact') {
+      const blockTarget = parseVec3(payload.position) || parseVec3(payload.target) || parseVec3(payload)
+      if (blockTarget) {
+        const block = bot.blockAt(blockTarget)
+        if (!block) return { ok: false, error: 'block not found (use position{x,y,z})' }
+        if (!isBlockReachableLikePlayer(block, 4.6)) {
+          return { ok: false, error: 'block is not reachable with normal survival interaction (distance/line-of-sight)' }
+        }
+        await bot.activateBlock(block)
+        pushMemory('action_interact_block', { position: blockTarget, name: block.name })
+        return { ok: true, block: block.name, position: blockTarget }
+      }
+
       let entity = null
       if (Number.isFinite(Number(payload.entityId))) {
         entity = bot.entities[Number(payload.entityId)]
@@ -2294,13 +2794,24 @@ async function runAction(action, payload = {}) {
 
       const tablePos = parseVec3(payload.table)
       const table = tablePos ? bot.blockAt(tablePos) : null
+      if (tablePos && !table) return { ok: false, error: 'crafting table block not found at table position' }
+      if (table && !isBlockReachableLikePlayer(table, 4.6)) {
+        return { ok: false, error: 'crafting table not reachable with normal survival interaction' }
+      }
       const recipes = bot.recipesFor(item.id, null, count, table)
       const recipe = recipes[0]
       if (!recipe) return { ok: false, error: `no recipe available for ${itemName}` }
 
+      const preCount = inventoryCountByName(itemName)
       await bot.craft(recipe, count, table || null)
+      await wait(120)
+      const postCount = inventoryCountByName(itemName)
+      const delta = postCount - preCount
+      if (delta <= 0) {
+        return { ok: false, error: `craft produced no ${itemName}; likely blocked or insufficient materials` }
+      }
       pushMemory('action_craft', { itemName, count, table: tablePos })
-      return { ok: true, itemName, count }
+      return { ok: true, itemName, count, produced: delta }
     }
 
     return { ok: false, error: `unknown action: ${name}` }
